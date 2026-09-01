@@ -60,6 +60,17 @@ podman exec -i timescaledb psql -U postgres -d metrics \
   -c "SELECT hypertable_name, hypertable_size(format('%I', hypertable_name)::regclass) FROM timescaledb_information.hypertables;"
 ```
 
+## Load test
+
+`tests/load_test.py` ověří, kolik vzorků/s receiver+TimescaleDB zvládne
+bez ztráty dat nebo pádu (ztráta se ověřuje přesným počtem řádků v DB, ne
+jen HTTP status kódy). Historie výsledků: [`tests/results/load-test-history.md`](tests/results/load-test-history.md).
+
+```bash
+TOKEN=$(ansible-vault view group_vars/all/vault.yml | grep vault_receiver_bearer_token | sed -E 's/.*: "(.*)"/\1/')
+python3 tests/load_test.py --token "$TOKEN"
+```
+
 ## Re-run po změnách
 
 Playbook je idempotentní. Schéma/continuous aggregates/politiky/role+granty

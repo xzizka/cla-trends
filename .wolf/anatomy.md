@@ -24,6 +24,9 @@ modern ansible-lint; fedora-podman has ansible-core 2.20 + ansible-lint 26.
 | `roles/receiver/` | Python remote_write receiver (manual protobuf wire decode, no `protobuf` pkg) in `files/app/receiver.py`, Containerfile, built locally via `containers.podman.podman_image` | 900 |
 | `roles/grafana/` | Grafana Quadlet unit + provisioned read-only TimescaleDB datasource (fixed `uid: timescaledb`) + provisioned "Metrics trend" dashboard (tiered UNION query across raw/1h/4h, `$metric_name` template var) | 400 |
 
+| `tests/load_test.py` | concurrency-ramp load test for the receiver; verifies zero data loss via exact DB row counts (not just HTTP codes), auto-cleans up its own test rows | 500 |
+| `tests/results/load-test-history.md` | dated load-test result log, for comparing across future changes | 200 |
+
 See `.wolf/buglog.json` for deployment gotchas hit while bringing this up
 (handler name collisions across roles, global `become`, group_vars naming,
 slow first image pull needing async pre-pull tasks).
