@@ -5,11 +5,15 @@
   async: 1800
   poll: 15
 
-- name: Create Grafana provisioning directory
+- name: Create Grafana provisioning directories
   ansible.builtin.file:
-    path: "/home/{{ ansible_user }}/grafana-provisioning/datasources"
+    path: "/home/{{ ansible_user }}/grafana-provisioning/{{ item }}"
     state: directory
     mode: "0755"
+  loop:
+    - datasources
+    - dashboards-provider
+    - dashboards-json
 
 - name: Render TimescaleDB datasource provisioning file
   ansible.builtin.template:
@@ -17,6 +21,20 @@
     dest: "/home/{{ ansible_user }}/grafana-provisioning/datasources/timescaledb.yml"
     # must stay world-readable: the containerized Grafana process is a
     # different (rootless-userns-mapped) UID, see bug-008/009 in buglog.json.
+    mode: "0644"
+  notify: Restart grafana
+
+- name: Deploy dashboard provider config
+  ansible.builtin.copy:
+    src: "provisioning/dashboards-provider/dashboards.yml"
+    dest: "/home/{{ ansible_user }}/grafana-provisioning/dashboards-provider/dashboards.yml"
+    mode: "0644"
+  notify: Restart grafana
+
+- name: Deploy provisioned dashboards
+  ansible.builtin.copy:
+    src: "provisioning/dashboards-json/"
+    dest: "/home/{{ ansible_user }}/grafana-provisioning/dashboards-json/"
     mode: "0644"
   notify: Restart grafana
 

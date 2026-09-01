@@ -22,7 +22,7 @@ modern ansible-lint; fedora-podman has ansible-core 2.20 + ansible-lint 26.
 | `roles/podman_base/` | installs podman, enables linger, opens firewalld ports 3000+9201, deploys shared `metrics.network` + named volume Quadlet units | 400 |
 | `roles/timescaledb/` | raw hypertable + `metrics_1h`/`metrics_4h` continuous aggregates + retention/compression policies (SQL in `files/init/`), roles/grants template, Quadlet unit | 700 |
 | `roles/receiver/` | Python remote_write receiver (manual protobuf wire decode, no `protobuf` pkg) in `files/app/receiver.py`, Containerfile, built locally via `containers.podman.podman_image` | 900 |
-| `roles/grafana/` | Grafana Quadlet unit + provisioned read-only TimescaleDB datasource | 300 |
+| `roles/grafana/` | Grafana Quadlet unit + provisioned read-only TimescaleDB datasource (fixed `uid: timescaledb`) + provisioned "Metrics trend" dashboard (tiered UNION query across raw/1h/4h, `$metric_name` template var) | 400 |
 
 See `.wolf/buglog.json` for deployment gotchas hit while bringing this up
 (handler name collisions across roles, global `become`, group_vars naming,

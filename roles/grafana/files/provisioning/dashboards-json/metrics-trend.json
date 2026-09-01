@@ -1,0 +1,60 @@
+{
+  "uid": "metrics-tiered-trend",
+  "title": "Metrics trend (raw → 1h → 4h)",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "metric_name",
+        "type": "query",
+        "label": "Metric",
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescaledb" },
+        "query": "SELECT DISTINCT metric_name FROM metrics_raw ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "$metric_name",
+      "description": "Stitched trend across all three retention tiers: metrics_raw (last 7 days, native resolution) -> metrics_1h (7 days-3 months) -> metrics_4h (older than 3 months). Each sub-query only touches its own time slice, so this stays cheap even when zoomed out to months.",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": true,
+            "pointSize": 4
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": { "type": "grafana-postgresql-datasource", "uid": "timescaledb" },
+          "rawSql": "SELECT\n  time AS \"time\",\n  labels->>'instance' AS instance,\n  value\nFROM metrics_raw\nWHERE metric_name = '$metric_name'\n  AND time > now() - interval '7 days'\n  AND $__timeFilter(time)\n\nUNION ALL\n\nSELECT\n  bucket AS \"time\",\n  labels->>'instance' AS instance,\n  avg_value AS value\nFROM metrics_1h\nWHERE metric_name = '$metric_name'\n  AND bucket <= now() - interval '7 days'\n  AND bucket > now() - interval '90 days'\n  AND $__timeFilter(bucket)\n\nUNION ALL\n\nSELECT\n  bucket AS \"time\",\n  labels->>'instance' AS instance,\n  avg_value AS value\nFROM metrics_4h\nWHERE metric_name = '$metric_name'\n  AND bucket <= now() - interval '90 days'\n  AND $__timeFilter(bucket)\n\nORDER BY 1"
+        }
+      ]
+    }
+  ]
+}

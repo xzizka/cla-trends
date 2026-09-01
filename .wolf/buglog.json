@@ -287,5 +287,22 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-09-01T12:45:00Z"
+  },
+  {
+    "id": "bug-017",
+    "timestamp": "2026-09-01T13:35:00Z",
+    "error_message": "level=error msg=\"Failed to provision data sources\" error=\"Datasource provisioning error: data source not found\" \u2014 grafana.service crash-loops (Restart=always never settles)",
+    "file": "roles/grafana/templates/timescaledb.yml.j2",
+    "root_cause": "Added a fixed uid: timescaledb to an already-running, previously auto-uid-assigned provisioned datasource. Grafana file-provisioning reconciliation could not cleanly rename the uid of an existing datasource row in its internal sqlite state (grafana-data volume) \u2014 it is treated as fatal on startup, hence the crash loop.",
+    "fix": "Wiped the grafana-data volume (systemd-grafana-data) and let Grafana reprovision from scratch. Safe to do \u2014 nothing of value lives there; datasource and dashboards are entirely file-provisioned from the repo, only UI prefs/session state would be lost. Lesson: pin uid: on a datasource from the very first deploy, never introduce/change it later without expecting to wipe grafana-data.",
+    "tags": [
+      "grafana",
+      "provisioning",
+      "datasource-uid",
+      "crash-loop"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T13:35:00Z"
   }
 ]
