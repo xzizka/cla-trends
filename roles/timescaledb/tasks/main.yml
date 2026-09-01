@@ -1,0 +1,88 @@
+---
+- name: Pre-pull TimescaleDB image (can be slow on first run)
+  containers.podman.podman_image:
+    name: "{{ timescaledb_image }}"
+  async: 1800
+  poll: 15
+
+- name: Create init-scripts directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/timescaledb-init"
+    state: directory
+    # must stay world-readable+traversable: the containerized postgres
+    # process is a different (rootless-userns-mapped) UID, not xzizka and
+    # not in xzizka's group, so 0750 makes it fail with "Permission denied"
+    # just listing the bind-mounted directory.
+    mode: "0755"
+
+- name: Copy static schema / continuous-aggregate / policy SQL
+  ansible.builtin.copy:
+    src: "init/{{ item }}"
+    dest: "/home/{{ ansible_user }}/timescaledb-init/{{ item }}"
+    mode: "0644"
+  loop:
+    - "01-schema.sql"
+    - "02-continuous-aggregates.sql"
+    - "03-policies.sql"
+
+- name: Render roles/grants SQL (contains vaulted passwords)
+  ansible.builtin.template:
+    src: "04-roles-grants.sql.j2"
+    dest: "/home/{{ ansible_user }}/timescaledb-init/04-roles-grants.sql"
+    # NOTE: must stay world-readable, same reason as the directory above —
+    # 0600 makes docker-entrypoint-initdb.d fail to read it. These passwords
+    # are no more exposed than POSTGRES_PASSWORD already is in `podman
+    # inspect`/`ps aux` on this single-user host, so this is an accepted
+    # tradeoff, not a real secret leak.
+    mode: "0644"
+
+- name: Deploy TimescaleDB Quadlet unit
+  ansible.builtin.template:
+    src: "timescaledb.container.j2"
+    dest: "{{ podman_quadlet_dir }}/timescaledb.container"
+    mode: "0600"
+  notify:
+    - Reload systemd user (timescaledb)
+    - Restart timescaledb
+
+- name: Flush handlers so the unit is (re)loaded before we start it
+  ansible.builtin.meta: flush_handlers
+
+- name: Start/enable TimescaleDB service
+  ansible.builtin.systemd:
+    name: timescaledb.service
+    state: started
+    enabled: true
+    scope: user
+
+- name: Wait for TimescaleDB to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 5432
+    timeout: 120
+
+# Not driven by docker-entrypoint-initdb.d (see the NOT-mounted-there note in
+# timescaledb.container.j2) — applied explicitly here, every deploy, against
+# whatever's actually running. All four files are idempotent (IF NOT EXISTS /
+# if_not_exists => true), so repeating this is safe.
+#
+# CREATE EXTENSION timescaledb (in 01-schema.sql) makes PostgreSQL restart
+# itself once to load the library via shared_preload_libraries, which drops
+# this psql connection mid-file the first time it ever runs. retries/delay
+# ride out that restart instead of treating it as a failure.
+- name: Apply/reapply schema, continuous aggregates, policies, roles+grants
+  ansible.builtin.command:
+    cmd: >-
+      podman exec -i timescaledb
+      psql -U {{ timescaledb_superuser }} -d {{ timescaledb_db }}
+      -v ON_ERROR_STOP=1 -f /opt/sql-init/{{ item }}
+  register: timescaledb_reapply_result
+  until: timescaledb_reapply_result.rc == 0
+  retries: 6
+  delay: 5
+  loop:
+    - "01-schema.sql"
+    - "02-continuous-aggregates.sql"
+    - "03-policies.sql"
+    - "04-roles-grants.sql"
+  changed_when: false

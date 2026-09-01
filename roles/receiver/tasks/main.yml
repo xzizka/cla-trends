@@ -1,0 +1,48 @@
+---
+- name: Create receiver app directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/receiver-app"
+    state: directory
+    mode: "0755"
+
+- name: Copy receiver app source
+  ansible.builtin.copy:
+    src: "app/{{ item }}"
+    dest: "/home/{{ ansible_user }}/receiver-app/{{ item }}"
+    mode: "0644"
+  loop:
+    - "receiver.py"
+    - "requirements.txt"
+    - "Containerfile"
+  register: receiver_app_files
+
+- name: Build receiver container image
+  containers.podman.podman_image:
+    name: "localhost/{{ receiver_image_name }}"
+    tag: "{{ receiver_image_tag }}"
+    path: "/home/{{ ansible_user }}/receiver-app"
+    build:
+      format: oci
+    force: "{{ receiver_app_files.changed }}"
+  async: 1800
+  poll: 15
+  notify: Restart receiver
+
+- name: Deploy receiver Quadlet unit
+  ansible.builtin.template:
+    src: "receiver.container.j2"
+    dest: "{{ podman_quadlet_dir }}/receiver.container"
+    mode: "0600"
+  notify:
+    - Reload systemd user (receiver)
+    - Restart receiver
+
+- name: Flush handlers so the image/unit are current before we start the service
+  ansible.builtin.meta: flush_handlers
+
+- name: Start/enable receiver service
+  ansible.builtin.systemd:
+    name: receiver.service
+    state: started
+    enabled: true
+    scope: user

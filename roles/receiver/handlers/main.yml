@@ -1,0 +1,11 @@
+---
+- name: Reload systemd user (receiver)
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+
+- name: Restart receiver
+  ansible.builtin.systemd:
+    name: receiver.service
+    state: restarted
+    scope: user

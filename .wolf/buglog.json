@@ -1,0 +1,291 @@
+[
+  {
+    "id": "bug-001",
+    "timestamp": "2026-09-01T10:45:00Z",
+    "error_message": "'vault_timescaledb_receiver_password' is undefined",
+    "file": "group_vars/vault.yml",
+    "root_cause": "group_vars/<name>.yml auto-loads only for an inventory group literally named <name>; there is no group called 'vault', so the file was never loaded.",
+    "fix": "Restructured into group_vars/all/ as a directory containing vars.yml + vault.yml \u2014 every file inside a group_vars/<group>/ directory loads for that group.",
+    "tags": [
+      "ansible",
+      "vault",
+      "group_vars"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T10:45:00Z"
+  },
+  {
+    "id": "bug-002",
+    "timestamp": "2026-09-01T11:05:00Z",
+    "error_message": "failure 1 during daemon-reload: Failed to connect to user scope bus via local transport: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)",
+    "file": "ansible.cfg",
+    "root_cause": "[privilege_escalation] become = True was set globally, so ansible.builtin.systemd tasks with scope: user ran as root (via sudo) instead of xzizka, and root cannot reach another user's D-Bus session bus.",
+    "fix": "Set become = False globally in ansible.cfg; become: true is now only set on the specific dnf/firewalld/loginctl tasks that need root.",
+    "tags": [
+      "ansible",
+      "become",
+      "systemd",
+      "rootless-podman"
+    ],
+    "related_bugs": [
+      "bug-003"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:05:00Z"
+  },
+  {
+    "id": "bug-003",
+    "timestamp": "2026-09-01T11:10:00Z",
+    "error_message": "Destination /home/xzizka/timescaledb-init not writable",
+    "file": "roles/timescaledb/tasks/main.yml",
+    "root_cause": "Earlier runs (before bug-002 was fixed) created ~/timescaledb-init and ~/.config/containers/systemd/* as root via the global become=True. After fixing become scoping, the xzizka-run playbook could no longer write into those root-owned paths.",
+    "fix": "Manually chown -R xzizka:xzizka on the affected directories once; no code change needed since become is now correctly scoped going forward.",
+    "tags": [
+      "ansible",
+      "permissions",
+      "become"
+    ],
+    "related_bugs": [
+      "bug-002"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:10:00Z"
+  },
+  {
+    "id": "bug-004",
+    "timestamp": "2026-09-01T11:20:00Z",
+    "error_message": "Task failed: 'Reload systemd user' handler from an unrelated role ran too early / ran repeatedly across roles",
+    "file": "roles/*/handlers/main.yml",
+    "root_cause": "Ansible handler names are global to the whole play regardless of which role defines them. All four roles defined a handler literally named 'Reload systemd user', so notifying it from any one role's tasks matched and ran all four roles' handlers.",
+    "fix": "Renamed each role's reload handler uniquely: 'Reload systemd user (podman_base)', '(timescaledb)', '(receiver)', '(grafana)', and updated the corresponding notify: entries.",
+    "tags": [
+      "ansible",
+      "handlers",
+      "naming-collision"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:20:00Z"
+  },
+  {
+    "id": "bug-005",
+    "timestamp": "2026-09-01T11:30:00Z",
+    "error_message": "No package podman-plugins available.",
+    "file": "roles/podman_base/tasks/main.yml",
+    "root_cause": "podman-plugins is not a package on Fedora 44 \u2014 rootless container networking is covered by netavark/aardvark-dns, pulled in automatically as podman dependencies.",
+    "fix": "Dropped podman-plugins from the dnf install list, install just podman.",
+    "tags": [
+      "fedora44",
+      "dnf",
+      "podman"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:30:00Z"
+  },
+  {
+    "id": "bug-006",
+    "timestamp": "2026-09-01T11:40:00Z",
+    "error_message": "Job for timescaledb.service failed because a timeout was exceeded.",
+    "file": "roles/timescaledb/templates/timescaledb.container.j2",
+    "root_cause": "First-time podman pull of the ~600MB timescaledb image over this VM's slow link took well over the unit's TimeoutStartSec=120, so systemd killed the start job mid-pull and retried from scratch each time.",
+    "fix": "Added an explicit pre-pull task (containers.podman.podman_image, async: 1800/poll: 15) before deploying the Quadlet unit in both timescaledb and grafana roles, and bumped TimeoutStartSec to 1800 in both *.container.j2 templates as a second line of defense.",
+    "tags": [
+      "podman",
+      "quadlet",
+      "timeout",
+      "slow-network"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:40:00Z"
+  },
+  {
+    "id": "bug-007",
+    "timestamp": "2026-09-01T11:15:00Z",
+    "error_message": "relation \"timescaledb_information.hypertables\" does not exist / password authentication failed for user \"receiver\": Role \"receiver\" does not exist",
+    "file": "roles/timescaledb/files/init/01-schema.sql",
+    "root_cause": "Forgot CREATE EXTENSION IF NOT EXISTS timescaledb; in 01-schema.sql. create_hypertable() and the timescaledb.compress reloption failed silently-ish (postgres docker-entrypoint-initdb.d aborts the whole init sequence on the first failing file), so 02/03/04 never ran either \u2014 no continuous aggregates, no policies, no roles/grants. Compounded by earlier failed start attempts (during the slow-pull timeout loop, bug-006) having already run initdb far enough that the data directory was considered initialized on later restarts (\"Skipping initialization\"), so the fixed script wouldn't have re-run without wiping the volume.",
+    "fix": "Added CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE; as the first statement in 01-schema.sql, then wiped the timescaledb-data volume and let it reinitialize cleanly from scratch.",
+    "tags": [
+      "timescaledb",
+      "postgres",
+      "docker-entrypoint-initdb.d",
+      "extension"
+    ],
+    "related_bugs": [
+      "bug-006"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:15:00Z"
+  },
+  {
+    "id": "bug-008",
+    "timestamp": "2026-09-01T11:20:00Z",
+    "error_message": "no roles (receiver/grafana_ro) or grants created; no error logged in `podman logs timescaledb` at all",
+    "file": "roles/timescaledb/tasks/main.yml",
+    "root_cause": "04-roles-grants.sql was rendered with mode 0600 (owner-only) to protect the vaulted passwords, but under rootless Podman's UID-mapped bind mount the container's postgres process is a different (mapped) UID than the host file owner, so it can't read a 0600 file. docker-entrypoint-initdb.d appears to skip an unreadable file without logging anything, so 01/02/03 (mode 0644) ran fine while 04 silently never executed.",
+    "fix": "Changed 04-roles-grants.sql to mode 0644 (matches the other init files) and tightened the parent ~/timescaledb-init directory to 0750 instead, so host-side protection comes from directory listing/traversal rather than the file mode.",
+    "tags": [
+      "timescaledb",
+      "podman",
+      "rootless",
+      "permissions",
+      "docker-entrypoint-initdb.d"
+    ],
+    "related_bugs": [
+      "bug-007"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:20:00Z"
+  },
+  {
+    "id": "bug-009",
+    "timestamp": "2026-09-01T11:22:00Z",
+    "error_message": "ls: can't open '/docker-entrypoint-initdb.d/': Permission denied \u2014 container exits 1 immediately, systemd hits restart-rate-limit (\"Start request repeated too quickly\") and the unit goes to failed state",
+    "file": "roles/timescaledb/tasks/main.yml",
+    "root_cause": "Overcorrected bug-008 by tightening the *directory* (~/timescaledb-init) to 0750 for 'host-side protection'. The containerized postgres process runs as a rootless-userns-mapped UID that is neither xzizka nor in xzizka's group, so with 0750 it can't even list the directory (needs the 'other' bits). Unlike bug-008, this failure is fatal to the whole container (non-zero exit), not a silent skip.",
+    "fix": "Reverted the directory back to 0755 (world-readable+traversable, same reasoning as the 0644 file mode). Also had to wipe the data volume again \u2014 postgres's own initdb had already completed before hitting the `ls` error, so 'Skipping initialization' would otherwise persist even after the permission fix.",
+    "tags": [
+      "timescaledb",
+      "podman",
+      "rootless",
+      "permissions",
+      "systemd"
+    ],
+    "related_bugs": [
+      "bug-008"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:22:00Z"
+  },
+  {
+    "id": "bug-010",
+    "timestamp": "2026-09-01T11:21:00Z",
+    "error_message": "psycopg.errors.DatatypeMismatch: column \"time\" is of type timestamp with time zone but expression is of type double precision",
+    "file": "roles/receiver/files/app/receiver.py",
+    "root_cause": "_insert() passed ts_ms / 1000.0 (a plain Python float, Unix epoch seconds) as the value for the `time timestamptz` column. psycopg3 has no default adapter from float -> timestamptz (it maps float -> double precision), only from datetime.datetime.",
+    "fix": "Convert to datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc) before inserting, which psycopg3 correctly adapts to timestamptz.",
+    "tags": [
+      "psycopg",
+      "postgres",
+      "timestamptz",
+      "receiver"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:21:00Z"
+  },
+  {
+    "id": "bug-011",
+    "timestamp": "2026-09-01T11:23:00Z",
+    "error_message": "Datasource provisioning error: open /etc/grafana/provisioning/datasources/timescaledb.yml: permission denied \u2014 grafana.service crash-loops to failed state",
+    "file": "roles/grafana/tasks/main.yml",
+    "root_cause": "Same class of bug as bug-008/009: the rendered datasource file was mode 0600, unreadable by the containerized Grafana process (different rootless-userns-mapped UID). Should have applied the bug-008 lesson to every rendered file bind-mounted into a container, not just the TimescaleDB one.",
+    "fix": "Changed timescaledb.yml.j2 render mode to 0644, matching the other bind-mounted config files.",
+    "tags": [
+      "grafana",
+      "podman",
+      "rootless",
+      "permissions"
+    ],
+    "related_bugs": [
+      "bug-008",
+      "bug-009"
+    ],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:23:00Z"
+  },
+  {
+    "id": "bug-012",
+    "timestamp": "2026-09-01T11:36:00Z",
+    "error_message": "Grafana Explore query builder: 'Select table' dropdown shows 'No options found', even though metrics_raw/metrics_1h/metrics_4h all exist and grafana_ro can SELECT them",
+    "file": "roles/grafana/templates/timescaledb.yml.j2",
+    "root_cause": "Not a data/permissions/ingestion issue (confirmed: information_schema.tables shows all 3 objects for grafana_ro, and a raw SQL query via /api/ds/query returns 200 with correct empty result). The visual query-builder's table/dataset autocomplete calls the datasource's /resources/tables and /resources/datasets endpoints, which return `[plugin.notImplemented] method not implemented` from the grafana-postgresql-datasource backend in this Grafana 11.4.0 build. Confirmed independent of the jsonData.timescaledb toggle (still fails with it off).",
+    "fix": "No fix needed/possible on the deployment side \u2014 this is a Grafana plugin-backend limitation, not a bug in our stack. Workaround: use the Code (raw SQL) query editor instead of the visual Builder; raw SQL against these tables works correctly.",
+    "tags": [
+      "grafana",
+      "postgres-datasource",
+      "known-limitation",
+      "not-a-bug"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:36:00Z"
+  },
+  {
+    "id": "bug-013",
+    "timestamp": "2026-09-01T11:55:00Z",
+    "error_message": "Error: in 18+, these Docker images are configured to store database data in a format which is compatible with \"pg_ctlcluster\" ... Counter to that, there appears to be PostgreSQL data in: /var/lib/postgresql/data \u2014 container exits 1, systemd restart-loops to failed",
+    "file": "roles/timescaledb/templates/timescaledb.container.j2",
+    "root_cause": "Upgraded TimescaleDB image from 2.17.2-pg16 to 2.29.2-pg18-oss. docker-library postgres images changed data-directory convention starting at PG18: they expect a single volume mount at /var/lib/postgresql (they manage a version-specific subdirectory themselves), not directly at /var/lib/postgresql/data as every prior version expected. The old mount path made the pg18 entrypoint think it found a pre-existing legacy-format data dir and refuse to start.",
+    "fix": "Changed the Volume= mount destination in timescaledb.container.j2 from /var/lib/postgresql/data to /var/lib/postgresql, then wiped and reinitialized the volume again.",
+    "tags": [
+      "timescaledb",
+      "postgresql18",
+      "docker-library",
+      "breaking-change"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T11:55:00Z"
+  },
+  {
+    "id": "bug-014",
+    "timestamp": "2026-09-01T11:58:00Z",
+    "error_message": "grafana_ro auth fails, no continuous aggregates present \u2014 same 'partially initialized then Skipping initialization forever' pattern as bug-003/007/009, now on pg18",
+    "file": "roles/timescaledb/tasks/main.yml, roles/timescaledb/files/init/03-policies.sql",
+    "root_cause": "docker-entrypoint-initdb.d only ever runs on a fully pristine data directory. This has now broken repeatedly for different reasons (permissions, extension order, a mid-init restart) whenever the container is interrupted between finishing one init file and the next. Retrying by wiping the volume works but is fragile and destroys any real data if this ever happens post-go-live.",
+    "fix": "Structural fix instead of another one-off wipe: added if_not_exists => true to all add_*_policy() calls in 03-policies.sql, and added an explicit 'Apply/reapply schema...' Ansible task that runs `podman exec timescaledb psql -f ...` for all 4 SQL files on every deploy (not just first init). All 4 files are now fully idempotent, so re-running them against an already-initialized (or partially-initialized) database is safe and self-heals this whole class of bug without touching the volume.",
+    "tags": [
+      "timescaledb",
+      "postgres",
+      "docker-entrypoint-initdb.d",
+      "idempotency",
+      "design-fix"
+    ],
+    "related_bugs": [
+      "bug-003",
+      "bug-007",
+      "bug-009",
+      "bug-013"
+    ],
+    "occurrences": 4,
+    "last_seen": "2026-09-01T11:58:00Z"
+  },
+  {
+    "id": "bug-015",
+    "timestamp": "2026-09-01T12:01:00Z",
+    "error_message": "ERROR: functionality not supported under the current \"apache\" license (CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous)); ERROR: function \"add_retention_policy\" is not supported under the current \"apache\" license",
+    "file": "group_vars/all/vars.yml",
+    "root_cause": "The `-oss` TimescaleDB image tag ships an Apache-2.0-only build. Continuous aggregates, add_retention_policy, and add_compression_policy are all Timescale License (TSL) features, NOT included under Apache. Only core hypertable partitioning and manual drop_chunks() work under -oss. This whole schema (continuous aggregates + retention + compression policies) depends on TSL features.",
+    "fix": "User chose (via AskUserQuestion) to switch to the non-oss tag (timescale/timescaledb:2.29.2-pg18, no -oss suffix) instead of redesigning around Apache-only \u2014 TSL is still free for self-hosted use, just not OSI-approved-open-source. Restores the design unchanged.",
+    "tags": [
+      "timescaledb",
+      "licensing",
+      "apache-vs-tsl",
+      "continuous-aggregates"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T12:01:00Z"
+  },
+  {
+    "id": "bug-016",
+    "timestamp": "2026-09-01T12:45:00Z",
+    "error_message": "Explore: \"You do not currently have a default database configured for this data source.\"",
+    "file": "roles/grafana/templates/timescaledb.yml.j2",
+    "root_cause": "Grafana 13.x moved the postgres/mysql/mssql datasource default-database setting into jsonData.database for the newer dataset-picker UI; the legacy top-level database: field (which we had set, and which the raw query-execution path still honors) is no longer read by Explore/query-builder to decide whether a default DB is configured.",
+    "fix": "Added database: \"{{ timescaledb_db }}\" under jsonData: in the datasource provisioning template, alongside the existing top-level database: field.",
+    "tags": [
+      "grafana",
+      "postgres-datasource",
+      "provisioning",
+      "grafana13"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-09-01T12:45:00Z"
+  }
+]

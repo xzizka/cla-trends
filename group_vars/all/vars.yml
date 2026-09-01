@@ -1,0 +1,35 @@
+---
+# Non-secret configuration for the grafana/timescaledb podman deployment.
+
+podman_quadlet_dir: "/home/{{ ansible_user }}/.config/containers/systemd"
+podman_network_name: "metrics"
+
+# NOT the -oss (Apache-only) tag: continuous aggregates, add_retention_policy
+# and add_compression_policy are all Timescale-License (TSL) features, not
+# included in the Apache-only build — this whole schema depends on them.
+# TSL is free for self-hosted use, just not OSI-approved open source.
+timescaledb_image: "docker.io/timescale/timescaledb:2.29.2-pg18"
+timescaledb_volume: "timescaledb-data"
+timescaledb_db: "metrics"
+timescaledb_superuser: "postgres"
+timescaledb_grafana_ro_user: "grafana_ro"
+timescaledb_receiver_user: "receiver"
+
+# Retention / aggregation tiers (see docs/AGGREGATION-DESIGN.md)
+retention_raw_days: 7
+retention_1h_days: 90
+# no automatic retention on the 4h tier — kept indefinitely unless changed later
+compress_raw_after_days: 1
+
+# grafana/grafana, not grafana/grafana-oss: the -oss repo's tags lag behind
+# (stuck at 13.0.2 as of 2026-09) while grafana/grafana gets every release.
+# Still fully open-source/free without a license key — enterprise features
+# are just gated behind a license, unlicensed = OSS behavior.
+grafana_image: "docker.io/grafana/grafana:13.2.0"
+grafana_volume: "grafana-data"
+grafana_port: 3000
+grafana_admin_user: "admin"
+
+receiver_image_name: "metrics-remote-write-receiver"
+receiver_image_tag: "1.0.0"
+receiver_port: 9201

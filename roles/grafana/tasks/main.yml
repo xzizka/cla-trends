@@ -1,0 +1,40 @@
+---
+- name: Pre-pull Grafana image (can be slow on first run)
+  containers.podman.podman_image:
+    name: "{{ grafana_image }}"
+  async: 1800
+  poll: 15
+
+- name: Create Grafana provisioning directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/grafana-provisioning/datasources"
+    state: directory
+    mode: "0755"
+
+- name: Render TimescaleDB datasource provisioning file
+  ansible.builtin.template:
+    src: "timescaledb.yml.j2"
+    dest: "/home/{{ ansible_user }}/grafana-provisioning/datasources/timescaledb.yml"
+    # must stay world-readable: the containerized Grafana process is a
+    # different (rootless-userns-mapped) UID, see bug-008/009 in buglog.json.
+    mode: "0644"
+  notify: Restart grafana
+
+- name: Deploy Grafana Quadlet unit
+  ansible.builtin.template:
+    src: "grafana.container.j2"
+    dest: "{{ podman_quadlet_dir }}/grafana.container"
+    mode: "0600"
+  notify:
+    - Reload systemd user (grafana)
+    - Restart grafana
+
+- name: Flush handlers so provisioning/unit are current before we start the service
+  ansible.builtin.meta: flush_handlers
+
+- name: Start/enable Grafana service
+  ansible.builtin.systemd:
+    name: grafana.service
+    state: started
+    enabled: true
+    scope: user

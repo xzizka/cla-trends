@@ -1,0 +1,26 @@
+-- Managed by Ansible (roles/timescaledb) — do not edit on the target host,
+-- changes will be overwritten on the next deploy.
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ timescaledb_receiver_user }}') THEN
+        CREATE ROLE {{ timescaledb_receiver_user }} LOGIN PASSWORD '{{ vault_timescaledb_receiver_password }}';
+    ELSE
+        ALTER ROLE {{ timescaledb_receiver_user }} PASSWORD '{{ vault_timescaledb_receiver_password }}';
+    END IF;
+
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ timescaledb_grafana_ro_user }}') THEN
+        CREATE ROLE {{ timescaledb_grafana_ro_user }} LOGIN PASSWORD '{{ vault_timescaledb_grafana_ro_password }}';
+    ELSE
+        ALTER ROLE {{ timescaledb_grafana_ro_user }} PASSWORD '{{ vault_timescaledb_grafana_ro_password }}';
+    END IF;
+END
+$$;
+
+-- receiver: insert-only on the raw hypertable, nothing else.
+GRANT USAGE ON SCHEMA public TO {{ timescaledb_receiver_user }};
+GRANT INSERT ON metrics_raw TO {{ timescaledb_receiver_user }};
+
+-- grafana_ro: read-only across all three tiers, used by the Grafana datasource.
+GRANT USAGE ON SCHEMA public TO {{ timescaledb_grafana_ro_user }};
+GRANT SELECT ON metrics_raw, metrics_1h, metrics_4h TO {{ timescaledb_grafana_ro_user }};

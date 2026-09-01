@@ -1,0 +1,11 @@
+---
+- name: Reload systemd user (timescaledb)
+  ansible.builtin.systemd:
+    daemon_reload: true
+    scope: user
+
+- name: Restart timescaledb
+  ansible.builtin.systemd:
+    name: timescaledb.service
+    state: restarted
+    scope: user
