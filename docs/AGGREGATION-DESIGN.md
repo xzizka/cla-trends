@@ -21,19 +21,19 @@ hierarchického continuous aggregate — dej vědět a doplním to.
 Externí Prometheus
    │  remote_write (protobuf + snappy, HTTPS/HTTP)
    ▼
-receiver (Podman container, :9201)   — dekóduje WriteRequest, INSERT do metrics_raw
+receiver (Docker container, :9201)   — dekóduje WriteRequest, INSERT do metrics_raw
    │
    ▼
-TimescaleDB (Podman container, metrics DB)
+TimescaleDB (Docker container, metrics DB)
    ├── metrics_raw   (hypertable, chunk 1 den, retention 7 dní, komprese po 1 dni)
    ├── metrics_1h    (continuous aggregate z metrics_raw, retention 90 dní)
    └── metrics_4h    (hierarchický continuous aggregate z metrics_1h, bez retention)
    ▲
    │  SELECT (read-only role grafana_ro)
-Grafana (Podman container, :3000) — PostgreSQL/TimescaleDB datasource
+Grafana (Docker container, :3000) — PostgreSQL/TimescaleDB datasource
 ```
 
-Všechny tři kontejnery běží na jednom sdíleném rootless Podman network
+Všechny tři kontejnery běží na jednom sdíleném Docker bridge network
 (`metrics.network`), takže si vidí navzájem podle jména kontejneru
 (`timescaledb`, `receiver`, `grafana`). Ven na LAN jsou otevřené jen porty
 Grafany (3000) a receiveru (9201); port TimescaleDB (5432) je publikovaný jen
@@ -88,8 +88,11 @@ nečeká na poslední chvíli před smazáním raw dat).
 
 ## Prostor na disku
 
-Cílový stroj má jen **13 GB volného místa** na `/` (kde leží i Podman
-volumes). To je nejrizikovější bod celého nasazení:
+Na fedora-podman (master branch) měl cílový stroj jen **13 GB volného
+místa** na `/` (kde leží i Podman volumes) — na `ubuntu-docker`
+(192.168.122.115) jsme volné místo needěli sami přes SSH ověřovat, takže
+platí totéž z opatrnosti, dokud to někdo neprověří. To je nejrizikovější bod
+celého nasazení obecně:
 
 - Komprese je zapnutá agresivně (raw po 1 dni, 1h agregát po 30 dnech) právě
   kvůli tomuto omezení.
@@ -110,7 +113,7 @@ křehké (restart kontejneru uprostřed initu, např. při reloadu kvůli
 dalším startu init přeskočí, i když doběhl jen částečně). Proto playbook
 tyto SQL soubory aplikuje znovu explicitně při **každém** spuštění (task
 "Apply/reapply schema..." v `roles/timescaledb/tasks/main.yml`) přes
-`podman exec ... psql -f`. Všechny čtyři soubory jsou psané idempotentně
+`docker exec ... psql -f`. Všechny čtyři soubory jsou psané idempotentně
 (`IF NOT EXISTS` / `if_not_exists => true`), takže je to bezpečné —
 stačí upravit SQL (např. `retention_1h_days`) a spustit
 `ansible-playbook playbook.yml`, žádný ruční zásah není potřeba.

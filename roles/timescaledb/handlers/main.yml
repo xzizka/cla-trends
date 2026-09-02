@@ -1,11 +1,31 @@
 ---
-- name: Reload systemd user (timescaledb)
-  ansible.builtin.systemd:
-    daemon_reload: true
-    scope: user
-
+# Same full container definition as tasks/main.yml + restart: true — needed
+# because a bind-mounted file changing content (SQL init scripts here) isn't
+# a container-definition diff Docker itself would notice, so we can't rely
+# on docker_container's own recreate-on-diff behavior for that case.
 - name: Restart timescaledb
-  ansible.builtin.systemd:
-    name: timescaledb.service
-    state: restarted
-    scope: user
+  community.docker.docker_container:
+    name: timescaledb
+    image: "{{ timescaledb_image }}"
+    state: started
+    restart: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network_name }}"
+    networks_cli_compatible: true
+    volumes:
+      - "{{ timescaledb_volume }}:/var/lib/postgresql"
+      - "/home/{{ ansible_user }}/timescaledb-init:/opt/sql-init:ro"
+    env:
+      POSTGRES_DB: "{{ timescaledb_db }}"
+      POSTGRES_USER: "{{ timescaledb_superuser }}"
+      POSTGRES_PASSWORD: "{{ vault_timescaledb_superuser_password }}"
+      TIMESCALEDB_TELEMETRY: "off"
+    published_ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "{{ timescaledb_superuser }}", "-d", "{{ timescaledb_db }}"]
+      interval: 15s
+      retries: 5
+      start_period: 30s
+    pull: never

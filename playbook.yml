@@ -1,11 +1,9 @@
 ---
-- name: Deploy Grafana + TimescaleDB metrics stack (rootless Podman)
-  hosts: fedora-podman
+- name: Deploy Grafana + TimescaleDB metrics stack (Docker)
+  hosts: ubuntu-docker
   gather_facts: true
-  environment:
-    XDG_RUNTIME_DIR: "/run/user/{{ lookup('ansible.builtin.pipe', 'id -u') }}"
   roles:
-    - podman_base
+    - docker_base
     - timescaledb
     - receiver
     - grafana

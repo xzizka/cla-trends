@@ -20,7 +20,8 @@ The ramp stops at the first level that isn't clean (HTTP failures, restart,
 or genuine drop) and reports the best clean level's throughput.
 
 Requires: SSH access to the deployment host (for exact-count verification
-and crash detection via `podman exec`/`podman inspect`), and the receiver's
+and crash detection via `docker exec`/`docker inspect` — pass --engine podman
+for the fedora-podman/master deployment instead), and the receiver's
 bearer token (see group_vars/all/vault.yml -> vault_receiver_bearer_token).
 
 Usage:
@@ -169,9 +170,9 @@ def ssh_run(ssh_target, remote_cmd, timeout=30):
     return subprocess.run(["ssh", ssh_target, remote_cmd], capture_output=True, text=True, timeout=timeout)
 
 
-def db_count(ssh_target, pg_container, run_id):
+def db_count(ssh_target, pg_container, run_id, engine="docker"):
     sql = f"SELECT count(*) FROM metrics_raw WHERE metric_name='{METRIC_NAME}' AND labels->>'run_id' = '{run_id}';"
-    remote_cmd = f"podman exec -i {pg_container} psql -U postgres -d metrics -tA -c " + shlex.quote(sql)
+    remote_cmd = f"{engine} exec -i {pg_container} psql -U postgres -d metrics -tA -c " + shlex.quote(sql)
     out = ssh_run(ssh_target, remote_cmd)
     if out.returncode != 0 or not out.stdout.strip():
         print("db_count error:", out.returncode, out.stdout, out.stderr, file=sys.stderr)
@@ -179,16 +180,16 @@ def db_count(ssh_target, pg_container, run_id):
     return int(out.stdout.strip())
 
 
-def cleanup(ssh_target, pg_container, run_id):
+def cleanup(ssh_target, pg_container, run_id, engine="docker"):
     sql = f"DELETE FROM metrics_raw WHERE metric_name='{METRIC_NAME}' AND labels->>'run_id' = '{run_id}';"
-    remote_cmd = f"podman exec -i {pg_container} psql -U postgres -d metrics -c " + shlex.quote(sql)
+    remote_cmd = f"{engine} exec -i {pg_container} psql -U postgres -d metrics -c " + shlex.quote(sql)
     ssh_run(ssh_target, remote_cmd)
 
 
-def container_restart_counts(ssh_target, container_names):
+def container_restart_counts(ssh_target, container_names, engine="docker"):
     out = {}
     for name in container_names:
-        remote_cmd = f"podman inspect {name} --format '{{{{.RestartCount}}}}'"
+        remote_cmd = f"{engine} inspect {name} --format '{{{{.RestartCount}}}}'"
         r = ssh_run(ssh_target, remote_cmd, timeout=15)
         out[name] = r.stdout.strip()
     return out
@@ -233,11 +234,12 @@ def run_level(url, token, run_id, concurrency, duration_s, req_timeout):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--token", required=True, help="RECEIVER_BEARER_TOKEN (see group_vars/all/vault.yml)")
-    ap.add_argument("--host", default="192.168.122.151", help="receiver host")
+    ap.add_argument("--host", default="192.168.122.115", help="receiver host")
     ap.add_argument("--port", type=int, default=9201, help="receiver port")
-    ap.add_argument("--ssh-target", default="xzizka@192.168.122.151", help="user@host for DB verification / crash detection over SSH")
-    ap.add_argument("--pg-container", default="timescaledb", help="podman container name for TimescaleDB")
-    ap.add_argument("--receiver-container", default="receiver", help="podman container name for the receiver")
+    ap.add_argument("--ssh-target", default="xzizka@192.168.122.115", help="user@host for DB verification / crash detection over SSH")
+    ap.add_argument("--engine", default="docker", choices=["docker", "podman"], help="container engine CLI on the deployment host")
+    ap.add_argument("--pg-container", default="timescaledb", help="container name for TimescaleDB")
+    ap.add_argument("--receiver-container", default="receiver", help="container name for the receiver")
     ap.add_argument("--levels", default="1,2,4,8,16,32", help="comma-separated concurrency levels to ramp through")
     ap.add_argument("--duration", type=float, default=10, help="seconds to hammer at each level")
     ap.add_argument("--request-timeout", type=float, default=15, help="client-side HTTP timeout per batch (seconds)")
@@ -251,7 +253,7 @@ def main():
 
     print(f"url={url}  run_id={run_id}  batch={SAMPLES_PER_BATCH} samples ({SERIES_PER_BATCH}x{SAMPLES_PER_SERIES})  duration={args.duration}s/level")
 
-    baseline_restarts = container_restart_counts(args.ssh_target, containers)
+    baseline_restarts = container_restart_counts(args.ssh_target, containers, args.engine)
     print("baseline restart counts:", baseline_restarts)
 
     cumulative_expected = 0
@@ -260,8 +262,8 @@ def main():
         r = run_level(url, args.token, run_id, c, args.duration, args.request_timeout)
         cumulative_expected += r["samples_sent_ok"]
         time.sleep(1.5)  # let in-flight inserts settle before counting
-        actual = db_count(args.ssh_target, args.pg_container, run_id)
-        restarts = container_restart_counts(args.ssh_target, containers)
+        actual = db_count(args.ssh_target, args.pg_container, run_id, args.engine)
+        restarts = container_restart_counts(args.ssh_target, containers, args.engine)
         crashed = restarts != baseline_restarts
         dropped = cumulative_expected - actual  # negative = some acked-late requests still landed, not real loss
 
@@ -294,7 +296,7 @@ def main():
     if args.no_cleanup:
         print(f"\ntest rows kept (metric_name='{METRIC_NAME}', run_id='{run_id}') — clean up manually when done.")
     else:
-        cleanup(args.ssh_target, args.pg_container, run_id)
+        cleanup(args.ssh_target, args.pg_container, run_id, args.engine)
         print("\ntest rows cleaned up.")
 
 

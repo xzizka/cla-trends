@@ -1,8 +1,7 @@
 ---
-# Non-secret configuration for the grafana/timescaledb podman deployment.
+# Non-secret configuration for the grafana/timescaledb Docker deployment.
 
-podman_quadlet_dir: "/home/{{ ansible_user }}/.config/containers/systemd"
-podman_network_name: "metrics"
+docker_network_name: "metrics"
 
 # NOT the -oss (Apache-only) tag: continuous aggregates, add_retention_policy
 # and add_compression_policy are all Timescale-License (TSL) features, not

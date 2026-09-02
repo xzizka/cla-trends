@@ -1,0 +1,56 @@
+---
+# xzizka has NO sudo on this host (Ubuntu 24.04, 192.168.122.115) — unlike
+# fedora-podman, `become` is unusable here. This role therefore does zero
+# privilege escalation: Docker (daemon + CLI) is assumed already installed
+# and running (apt install docker.io / docker-ce is a one-time root step
+# someone else already did), and xzizka is assumed a member of the `docker`
+# group so `docker` commands work unprivileged. If that group membership is
+# missing, the preflight check below fails fast with an actionable message
+# instead of every later task dying on "permission denied" against the
+# Docker socket.
+#
+# Consequence: no firewalld/ufw management either (that also needs root on
+# Ubuntu). If a firewall is active on this host, opening
+# {{ grafana_port }}/tcp and {{ receiver_port }}/tcp is a manual step for
+# whoever has sudo — see README.md.
+
+- name: Preflight - confirm the Docker CLI/daemon is usable without sudo
+  ansible.builtin.command: docker info
+  register: docker_preflight
+  changed_when: false
+  failed_when: false
+
+- name: Preflight - fail with an actionable message if docker access is missing
+  ansible.builtin.fail:
+    msg: >-
+      `docker info` failed for {{ ansible_user }} on {{ inventory_hostname }}
+      (rc={{ docker_preflight.rc }}). This host has no sudo for xzizka, so
+      this playbook cannot fix it itself. Most likely cause: xzizka is not in
+      the `docker` group yet. Ask whoever has root on this box to run
+      `sudo usermod -aG docker {{ ansible_user }}`, then log xzizka out/in
+      (or `newgrp docker`) before re-running this playbook.
+      stderr: {{ docker_preflight.stderr | default('') }}
+  when: docker_preflight.rc != 0
+
+- name: Ensure the Docker Python SDK is importable by the target's Python (user-site, no sudo)
+  ansible.builtin.pip:
+    name: docker
+    state: present
+    extra_args: --user
+  # community.docker's modules (docker_image/docker_container/docker_network/
+  # docker_volume) shell out to this library on the TARGET host, not the
+  # control node. `pip install --user` needs no root, only pip3 + outbound
+  # network access on the target.
+
+- name: Create shared bridge network for the metrics stack
+  community.docker.docker_network:
+    name: "{{ docker_network_name }}"
+    state: present
+
+- name: Create named volumes
+  community.docker.docker_volume:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "{{ timescaledb_volume }}"
+    - "{{ grafana_volume }}"

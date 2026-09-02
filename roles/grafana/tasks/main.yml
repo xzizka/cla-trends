@@ -1,9 +1,8 @@
 ---
 - name: Pre-pull Grafana image (can be slow on first run)
-  containers.podman.podman_image:
+  community.docker.docker_image:
     name: "{{ grafana_image }}"
-  async: 1800
-  poll: 15
+    source: pull
 
 - name: Create Grafana provisioning directories
   ansible.builtin.file:
@@ -19,8 +18,9 @@
   ansible.builtin.template:
     src: "timescaledb.yml.j2"
     dest: "/home/{{ ansible_user }}/grafana-provisioning/datasources/timescaledb.yml"
-    # must stay world-readable: the containerized Grafana process is a
-    # different (rootless-userns-mapped) UID, see bug-008/009 in buglog.json.
+    # must stay world-readable: the Grafana process inside the container
+    # runs as the image's own uid (472), not xzizka's uid/group — see
+    # bug-008/009 in buglog.json.
     mode: "0644"
   notify: Restart grafana
 
@@ -38,21 +38,30 @@
     mode: "0644"
   notify: Restart grafana
 
-- name: Deploy Grafana Quadlet unit
-  ansible.builtin.template:
-    src: "grafana.container.j2"
-    dest: "{{ podman_quadlet_dir }}/grafana.container"
-    mode: "0600"
-  notify:
-    - Reload systemd user (grafana)
-    - Restart grafana
-
-- name: Flush handlers so provisioning/unit are current before we start the service
-  ansible.builtin.meta: flush_handlers
-
-- name: Start/enable Grafana service
-  ansible.builtin.systemd:
-    name: grafana.service
+- name: Deploy Grafana container
+  community.docker.docker_container:
+    name: grafana
+    image: "{{ grafana_image }}"
     state: started
-    enabled: true
-    scope: user
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network_name }}"
+    networks_cli_compatible: true
+    volumes:
+      - "{{ grafana_volume }}:/var/lib/grafana"
+      - "/home/{{ ansible_user }}/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro"
+      - "/home/{{ ansible_user }}/grafana-provisioning/dashboards-provider:/etc/grafana/provisioning/dashboards:ro"
+      - "/home/{{ ansible_user }}/grafana-provisioning/dashboards-json:/var/lib/grafana/dashboards:ro"
+    env:
+      GF_SECURITY_ADMIN_USER: "{{ grafana_admin_user }}"
+      GF_SECURITY_ADMIN_PASSWORD: "{{ vault_grafana_admin_password }}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    published_ports:
+      - "0.0.0.0:{{ grafana_port }}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      retries: 5
+      start_period: 30s
+    pull: never
+  notify: Restart grafana

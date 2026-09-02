@@ -17,32 +17,35 @@
   register: receiver_app_files
 
 - name: Build receiver container image
-  containers.podman.podman_image:
-    name: "localhost/{{ receiver_image_name }}"
+  community.docker.docker_image:
+    name: "{{ receiver_image_name }}"
     tag: "{{ receiver_image_tag }}"
-    path: "/home/{{ ansible_user }}/receiver-app"
+    source: build
     build:
-      format: oci
-    force: "{{ receiver_app_files.changed }}"
-  async: 1800
-  poll: 15
+      path: "/home/{{ ansible_user }}/receiver-app"
+      dockerfile: Containerfile
+    force_source: "{{ receiver_app_files.changed }}"
   notify: Restart receiver
 
-- name: Deploy receiver Quadlet unit
-  ansible.builtin.template:
-    src: "receiver.container.j2"
-    dest: "{{ podman_quadlet_dir }}/receiver.container"
-    mode: "0600"
-  notify:
-    - Reload systemd user (receiver)
-    - Restart receiver
-
-- name: Flush handlers so the image/unit are current before we start the service
-  ansible.builtin.meta: flush_handlers
-
-- name: Start/enable receiver service
-  ansible.builtin.systemd:
-    name: receiver.service
+- name: Deploy receiver container
+  community.docker.docker_container:
+    name: receiver
+    image: "{{ receiver_image_name }}:{{ receiver_image_tag }}"
     state: started
-    enabled: true
-    scope: user
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network_name }}"
+    networks_cli_compatible: true
+    env:
+      RECEIVER_PORT: "{{ receiver_port | string }}"
+      RECEIVER_BEARER_TOKEN: "{{ vault_receiver_bearer_token }}"
+      RECEIVER_PG_DSN: "postgresql://{{ timescaledb_receiver_user }}:{{ vault_timescaledb_receiver_password }}@timescaledb:5432/{{ timescaledb_db }}"
+    published_ports:
+      - "0.0.0.0:{{ receiver_port }}:{{ receiver_port }}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ receiver_port }}/healthz', timeout=3)"]
+      interval: 15s
+      retries: 5
+      start_period: 15s
+    pull: never
+  notify: Restart receiver
