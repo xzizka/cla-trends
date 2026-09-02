@@ -34,11 +34,9 @@ plyne (viz níže). Návrh agregace/retenčních vrstev:
   - Otevření portů `{{ grafana_port }}`/`{{ receiver_port }}` na firewallu
     (pokud je na hostu vůbec nějaký aktivní) je manuální krok pro toho, kdo
     má na stroji root.
-- **Spojení**: playbook se spouští z control node přes SSH
-  (`ansible_host: 192.168.122.115` v `inventory/hosts.yml`), ne lokálně na
-  cíli jako u fedora-podman (to bylo obcházení příliš staré Ansible verze na
-  tehdejším control node + specifikum systemd `--user` session přes SSH —
-  u Dockeru odpadá obojí).
+- **Spojení**: playbook se stejně jako u fedora-podman spouští lokálně na
+  cíli (`ansible_connection: local` v `inventory/hosts.yml`) — spouští se
+  tedy přímo na `ubuntu-docker`, ne z control node přes SSH.
 
 ## Nasazení
 
