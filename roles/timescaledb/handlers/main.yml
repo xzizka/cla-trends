@@ -28,4 +28,7 @@
       interval: 15s
       retries: 5
       start_period: 30s
-    pull: never
+    # false, not 'never': the VM's community.docker has `pull` as bool-only
+    # (see tasks/main.yml) and the image is already local by the time a
+    # handler runs.
+    pull: false

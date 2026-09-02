@@ -74,7 +74,13 @@
       retries: 5
       start_period: 30s
     # generous: the first pull of this image can take a long time on a slow link
-    pull: never
+    #
+    # Boolean `false`, not the string 'never': both mean "don't pull, the
+    # image is already local from the pre-pull task above" but the VM's
+    # installed community.docker version still has `pull` as bool-only —
+    # 'never' (str) blew up there with "unable to convert to bool". `false`
+    # works on that version and on newer ones where `pull` accepts either.
+    pull: false
   notify: Restart timescaledb
 
 - name: Flush handlers so the container is (re)started before we wait on it
