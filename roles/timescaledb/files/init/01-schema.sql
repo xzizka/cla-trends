@@ -29,3 +29,27 @@ ALTER TABLE metrics_raw SET (
     timescaledb.compress_segmentby = 'metric_name',
     timescaledb.compress_orderby = 'time DESC'
 );
+
+-- ---------------------------------------------------------------------------
+-- Importer bookkeeping (roles/importer). Not metrics data — one row per
+-- (source, stream) telling the importer where it got to, so a restart or an
+-- outage resumes exactly where it left off instead of re-importing (metrics_raw
+-- has no unique constraint, so a duplicate import would silently double-count)
+-- or skipping a window.
+--
+-- Contract: last_ts is an EXCLUSIVE upper bound — "everything with
+-- time < last_ts has been imported for this stream". The importer only ever
+-- writes samples in [start, end) and moves last_ts to `end` in the SAME
+-- transaction as the inserts, so the table can never disagree with the data.
+--
+-- Deliberately a plain table, not a hypertable: it is tiny (one row per
+-- configured query) and is updated in place, never appended to.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS importer_state (
+    source_name TEXT        NOT NULL,
+    stream_key  TEXT        NOT NULL,
+    last_ts     TIMESTAMPTZ NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_rows   BIGINT      NOT NULL DEFAULT 0,
+    PRIMARY KEY (source_name, stream_key)
+);

@@ -1,0 +1,38 @@
+# Managed by Ansible (roles/importer) — do not edit on the target host,
+# changes will be overwritten on the next deploy. Edit `importer_defaults` /
+# `importer_sources` in group_vars/all/vars.yml instead.
+#
+# Credentials appear here only as ${IMPORTER_CRED_*} references, never as
+# literal values: this file is bind-mounted into the container and therefore
+# has to be world-readable, so the actual secrets are passed as container
+# environment variables from `vault_importer_env` instead.
+---
+defaults:
+{{ importer_defaults | to_nice_yaml(indent=2) | trim | indent(2, true) }}
+sources:
+{% for src in importer_sources %}
+{#- Strip the Ansible-only keys and substitute env references for secrets. -#}
+{%   set cred_id = src.credentials_id | default(none) %}
+{%   set env_prefix = 'IMPORTER_CRED_' ~ (cred_id | default('', true) | upper | regex_replace('[^A-Z0-9]', '_')) %}
+{%   set auth_in = src.auth | default({}) %}
+{%   set auth_type = auth_in.type | default('none') %}
+{%   if cred_id and auth_type in ['bearer', 'token'] %}
+{%     set auth_out = {'type': auth_type, 'token': '${' ~ env_prefix ~ '_TOKEN}'} %}
+{%   elif cred_id and auth_type == 'basic' %}
+{%     set auth_out = {'type': 'basic',
+                       'username': auth_in.username | default('${' ~ env_prefix ~ '_USERNAME}'),
+                       'password': '${' ~ env_prefix ~ '_PASSWORD}'} %}
+{%   elif cred_id and auth_type == 'header' %}
+{%     set auth_out = {'type': 'header',
+                       'name': auth_in.name,
+                       'value': '${' ~ env_prefix ~ '_VALUE}'} %}
+{%   else %}
+{#-    No credentials_id: either auth-less, or the secret was inlined in
+       vars.yml (works, but then it lands in this file in plaintext). -#}
+{%     set auth_out = auth_in %}
+{%   endif %}
+{%   set body = src | combine({'auth': auth_out}) | dict2items
+                     | rejectattr('key', 'equalto', 'credentials_id')
+                     | items2dict %}
+{{ [body] | to_nice_yaml(indent=2) | trim | indent(2, true) }}
+{% endfor %}

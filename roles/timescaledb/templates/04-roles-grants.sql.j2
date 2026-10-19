@@ -9,6 +9,12 @@ BEGIN
         ALTER ROLE {{ timescaledb_receiver_user }} PASSWORD '{{ vault_timescaledb_receiver_password }}';
     END IF;
 
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ timescaledb_importer_user }}') THEN
+        CREATE ROLE {{ timescaledb_importer_user }} LOGIN PASSWORD '{{ vault_timescaledb_importer_password }}';
+    ELSE
+        ALTER ROLE {{ timescaledb_importer_user }} PASSWORD '{{ vault_timescaledb_importer_password }}';
+    END IF;
+
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ timescaledb_grafana_ro_user }}') THEN
         CREATE ROLE {{ timescaledb_grafana_ro_user }} LOGIN PASSWORD '{{ vault_timescaledb_grafana_ro_password }}';
     ELSE
@@ -21,6 +27,15 @@ $$;
 GRANT USAGE ON SCHEMA public TO {{ timescaledb_receiver_user }};
 GRANT INSERT ON metrics_raw TO {{ timescaledb_receiver_user }};
 
+-- importer: same insert-only access to the raw hypertable as the receiver
+-- (both are write paths into the same tier), plus read/write on its own
+-- bookkeeping table. Notably NOT granted SELECT on metrics_raw: the importer
+-- reads its resume position from importer_state, never from the metrics.
+GRANT USAGE ON SCHEMA public TO {{ timescaledb_importer_user }};
+GRANT INSERT ON metrics_raw TO {{ timescaledb_importer_user }};
+GRANT SELECT, INSERT, UPDATE, DELETE ON importer_state TO {{ timescaledb_importer_user }};
+
 -- grafana_ro: read-only across all three tiers, used by the Grafana datasource.
 GRANT USAGE ON SCHEMA public TO {{ timescaledb_grafana_ro_user }};
 GRANT SELECT ON metrics_raw, metrics_1h, metrics_4h TO {{ timescaledb_grafana_ro_user }};
+GRANT SELECT ON importer_state TO {{ timescaledb_grafana_ro_user }};

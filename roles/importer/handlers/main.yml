@@ -1,0 +1,29 @@
+---
+# Explicit restart (same reasoning as the receiver's and grafana's handlers):
+# after a rebuild the image tag string is unchanged ("importer:1.0.0"), and
+# sources.yml is bind-mounted content that docker_container does not diff, so
+# neither a code change nor a config change would trigger a recreate on its own.
+- name: Restart importer
+  community.docker.docker_container:
+    name: importer
+    image: "{{ importer_image_name }}:{{ importer_image_tag }}"
+    state: started
+    restart: true
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network_name }}"
+    networks_cli_compatible: true
+    env: "{{ importer_container_env }}"
+    volumes:
+      - "/home/{{ ansible_user }}/importer-config:/etc/importer:ro"
+    published_ports:
+      - "127.0.0.1:{{ importer_status_port }}:{{ importer_status_port }}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ importer_status_port }}/healthz', timeout=3)"]
+      interval: 15s
+      retries: 5
+      start_period: 15s
+    # false, not 'never': the VM's community.docker has `pull` as bool-only
+    # (see roles/timescaledb/tasks/main.yml) and the image is already local
+    # by the time a handler runs.
+    pull: false

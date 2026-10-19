@@ -5,5 +5,9 @@
   roles:
     - docker_base
     - timescaledb
+    # receiver = push ingestion (Prometheus remote_write into us),
+    # importer = pull ingestion (we poll Prometheus/InfluxDB endpoints).
+    # Both after timescaledb: they need the schema, roles and grants applied.
     - receiver
+    - importer
     - grafana

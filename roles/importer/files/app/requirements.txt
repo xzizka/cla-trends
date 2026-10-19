@@ -1,0 +1,23 @@
+# psycopg pinned exactly to the same versions the receiver image already
+# builds and runs with in this project — same database, same driver, no
+# reason for the two images to drift apart.
+psycopg[binary]==3.3.5
+psycopg_pool==3.3.1
+
+# Range-pinned rather than exact: these three are new to this project, so
+# there is no known-good exact version from a previous successful build to
+# copy. The floors are versions whose APIs this code actually uses
+# (requests.Session, yaml.safe_load, croniter.is_valid/get_next), the ceilings
+# guard against a major bump. Tighten to exact pins from the first successful
+# build with:
+#   docker run --rm --entrypoint pip metrics-importer:1.0.0 freeze
+requests>=2.32,<3
+PyYAML>=6.0,<7
+croniter>=2.0,<8
+
+# Not imported by this code — it is the fallback time zone database that
+# `zoneinfo` reaches for when the system one is absent. Debian *-slim images
+# do not ship /usr/share/zoneinfo, so without this a source configured with
+# `schedule: {cron: ..., timezone: Europe/Prague}` would fail at startup with
+# "No time zone found with key Europe/Prague". Costs ~450KB.
+tzdata

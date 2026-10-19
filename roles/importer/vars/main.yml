@@ -1,0 +1,30 @@
+---
+# Container environment, assembled once so tasks/main.yml and handlers/main.yml
+# cannot drift apart (they must pass an identical `env` or every playbook run
+# would look like a change and needlessly restart the container).
+#
+# The database password goes in PGPASSWORD rather than inline in the DSN,
+# unlike roles/receiver. Reason: a password containing any of @ : / ? # in a
+# `postgresql://user:pw@host/db` URL silently corrupts the DSN — the parse
+# fails or, worse, connects somewhere unintended — and URL-encoding it in
+# Jinja is fiddly to get right for every reserved character. libpq reads
+# PGPASSWORD when the conninfo carries no password, so this sidesteps the
+# whole class of problem. Same exposure as the DSN either way (both are
+# container env vars, visible in `docker inspect`).
+#
+# `vault_importer_env` is merged in verbatim: it is a flat map of
+# IMPORTER_CRED_<ID>_<FIELD> -> secret, which is exactly the shape
+# sources.yml.j2 emits ${...} references for. Keeping it flat (rather than
+# nested per source) is what makes this a one-line combine instead of an
+# Ansible flattening exercise.
+importer_container_env: >-
+  {{
+    {
+      'IMPORTER_CONFIG': '/etc/importer/sources.yml',
+      'IMPORTER_STATUS_PORT': importer_status_port | string,
+      'IMPORTER_PG_DSN': 'postgresql://' ~ timescaledb_importer_user
+                         ~ '@timescaledb:5432/' ~ timescaledb_db,
+      'PGPASSWORD': vault_timescaledb_importer_password,
+      'LOG_LEVEL': importer_log_level,
+    } | combine(vault_importer_env | default({}))
+  }}

@@ -1,0 +1,14 @@
+FROM docker.io/library/python:3.14-slim
+
+RUN useradd --system --no-create-home --uid 10002 importer
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY importer.py config.py httpclient.py store.py timespec.py ./
+COPY sources/ ./sources/
+
+USER importer
+EXPOSE 9202
+ENTRYPOINT ["python3", "-u", "importer.py"]

@@ -32,3 +32,111 @@ grafana_admin_user: "admin"
 receiver_image_name: "metrics-remote-write-receiver"
 receiver_image_tag: "1.0.0"
 receiver_port: 9201
+
+# ---------------------------------------------------------------------------
+# Importer — active (pull) ingestion, the counterpart to the receiver
+#
+# The receiver waits for a Prometheus to remote_write into it; the importer
+# reaches out to configured endpoints on a schedule and pulls whatever has
+# appeared since it last looked. Both write into the same `metrics_raw`
+# hypertable, so retention, rollup tiers and dashboards are unchanged.
+# Design notes: docs/IMPORTER-DESIGN.md
+# ---------------------------------------------------------------------------
+timescaledb_importer_user: "importer"
+importer_image_name: "metrics-importer"
+importer_image_tag: "1.0.0"
+# Operator-only /healthz + /status endpoint, published on 127.0.0.1 only.
+importer_status_port: 9202
+importer_log_level: "INFO"
+
+# Applied to every source; any key here can be overridden per source.
+importer_defaults:
+  timeout_seconds: 60
+  # First-run bootstrap window, and the cap on how far back an outage is
+  # backfilled. Deliberately equal to retention_raw_days above: importing
+  # anything older would be dropped again by the raw tier's retention policy.
+  max_lookback: "7d"
+  # Do not import right up to `now`. Raise this if a source is still writing
+  # samples for the current instant — the watermark moving past them would
+  # lose them for good. 0s is right for a Prometheus being scraped normally.
+  end_lag: "0s"
+  tls_verify: true
+  retries: 3
+  # Import once at container start instead of waiting for the first scheduled
+  # tick, so a deploy is verifiable immediately. Safe: the window is
+  # watermark-driven either way, so this changes *when* data arrives, never
+  # which data.
+  run_on_start: true
+
+# Sources to pull from. Empty by default — the importer container still runs
+# (healthy, idle) and logs a warning, rather than restart-looping, so a fresh
+# deploy is not broken by not having decided on a source yet.
+#
+# Secrets do NOT go here: set `credentials_id: <id>` and put the actual value
+# in `vault_importer_env` as IMPORTER_CRED_<ID>_TOKEN /_USERNAME /_PASSWORD /
+# _VALUE (see README.md, "Importer — přidání zdroje"). group_vars/all/vars.yml
+# is not encrypted.
+#
+# Each entry needs: name, type, schedule, and a per-type set of connection
+# keys. `queries[].name` is the watermark key — renaming one makes that
+# stream re-bootstrap from max_lookback, so treat names as stable ids.
+#
+# Worked examples for all three supported types:
+#
+# importer_sources:
+#   - name: prom-main
+#     type: prometheus
+#     url: "http://192.168.122.1:9090"
+#     schedule: {every: "1h"}
+#     auth: {type: bearer}
+#     credentials_id: prom_main          # -> IMPORTER_CRED_PROM_MAIN_TOKEN
+#     step: "60s"                        # resolution of the range query
+#     extra_labels: {env: prod}          # merged into `labels` on every row
+#     queries:
+#       - name: up
+#         query: 'up'
+#       - name: cpu_rate
+#         query: 'rate(node_cpu_seconds_total[5m])'
+#         # required: rate()/sum()/avg() results carry no __name__, so without
+#         # this the samples would be stored under the query name instead.
+#         metric_name: node_cpu_seconds_rate
+#
+#   - name: influx-legacy
+#     type: influxdb1
+#     url: "http://192.168.122.30:8086"
+#     database: telegraf
+#     schedule: {cron: "17 3 * * *", timezone: "Europe/Prague"}
+#     auth: {type: basic, username: reader}
+#     credentials_id: influx_legacy      # -> IMPORTER_CRED_INFLUX_LEGACY_PASSWORD
+#     queries:
+#       - name: cpu_idle
+#         # $timeFilter expands to a half-open `time >= .. AND time < ..`
+#         query: >-
+#           SELECT mean("usage_idle") FROM "cpu"
+#           WHERE $timeFilter GROUP BY time(1m), "host" fill(none)
+#         # MUST match GROUP BY time(1m): aligns import windows to the same
+#         # grid InfluxDB buckets on, otherwise every window edge stores a
+#         # partial bucket averaged over a few seconds instead of a minute.
+#         align: "1m"
+#
+#   - name: influx-v2
+#     type: influxdb2
+#     url: "http://192.168.122.31:8086"
+#     org: "my-org"
+#     schedule: {every: "24h"}
+#     auth: {type: token}
+#     credentials_id: influx_v2          # -> IMPORTER_CRED_INFLUX_V2_TOKEN
+#     queries:
+#       - name: mem_used
+#         align: "1m"                    # match aggregateWindow(every: 1m)
+#         query: |
+#           from(bucket: "metrics")
+#             |> range(start: $__start, stop: $__stop)
+#             |> filter(fn: (r) => r._measurement == "mem")
+#             |> aggregateWindow(every: 1m, fn: mean, createEmpty: false,
+#                                timeSrc: "_start")
+#         # timeSrc: "_start" is NOT optional. Flux defaults to stamping each
+#         # bucket with its STOP time, while InfluxQL and TimescaleDB's
+#         # time_bucket() stamp the START — leave the default and this source's
+#         # data sits one interval later than everyone else's in the same table.
+importer_sources: []

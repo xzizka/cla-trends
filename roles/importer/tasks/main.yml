@@ -1,0 +1,124 @@
+---
+# The importer is the pull counterpart to the receiver: same target table,
+# same image-build-then-run shape as roles/receiver, so most of the comments
+# there apply verbatim here too.
+
+- name: Validate that every source referencing credentials has them in the vault
+  ansible.builtin.assert:
+    that:
+      # Short-circuits: a source without credentials_id never evaluates the
+      # lookup, so importer_cred_count is not resolved for auth-less sources.
+      - item.credentials_id is not defined or importer_cred_count | int > 0
+    fail_msg: >-
+      Source '{{ item.name }}' sets credentials_id='{{ item.credentials_id | default('') }}'
+      but vault_importer_env contains no {{ importer_cred_prefix }}* entry.
+      Add it with `ansible-vault edit group_vars/all/vault.yml` — see README.md
+      ("Importer — přidání zdroje"). Caught here rather than at container
+      startup so the failure names the source instead of surfacing as a 401
+      from the endpoint an hour later.
+    quiet: true
+  loop: "{{ importer_sources }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+  vars:
+    # Single-line on purpose. A folded (`>-`) scalar would keep the newline and
+    # the extra indentation of any more-indented continuation line, which is a
+    # silent trap inside a Jinja expression.
+    #
+    # `| default('', true)` not `| default('')`: credentials_id may be absent,
+    # and Jinja evaluates this line regardless, choking on None | upper.
+    importer_cred_prefix: "IMPORTER_CRED_{{ item.credentials_id | default('', true) | upper | regex_replace('[^A-Z0-9]', '_') }}_"
+    # Resolves to the count, not the list: `| length` on a templated var is
+    # type-dependent (str repr vs. real list), `| int` on a count never is.
+    importer_cred_count: "{{ vault_importer_env | default({}) | select('match', '^' ~ importer_cred_prefix) | list | length }}"
+
+- name: Create importer app directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/importer-app"
+    state: directory
+    mode: "0755"
+
+- name: Create importer app plugin directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/importer-app/sources"
+    state: directory
+    mode: "0755"
+
+- name: Copy importer app source
+  ansible.builtin.copy:
+    src: "app/{{ item }}"
+    dest: "/home/{{ ansible_user }}/importer-app/{{ item }}"
+    mode: "0644"
+  loop:
+    - "importer.py"
+    - "config.py"
+    - "httpclient.py"
+    - "store.py"
+    - "timespec.py"
+    - "requirements.txt"
+    - "Containerfile"
+    - "sources/__init__.py"
+    - "sources/base.py"
+    - "sources/prometheus.py"
+    - "sources/influxdb1.py"
+    - "sources/influxdb2.py"
+  register: importer_app_files
+
+- name: Create importer config directory
+  ansible.builtin.file:
+    path: "/home/{{ ansible_user }}/importer-config"
+    state: directory
+    # world-traversable for the same reason as timescaledb-init: the process
+    # inside the container runs as the image's own uid (10002), which is
+    # neither {{ ansible_user }} nor in its group.
+    mode: "0755"
+
+- name: Render importer sources config
+  ansible.builtin.template:
+    src: "sources.yml.j2"
+    dest: "/home/{{ ansible_user }}/importer-config/sources.yml"
+    # must stay world-readable (bind-mounted, container uid 10002). Safe to be
+    # readable here because the template writes credentials only as
+    # ${IMPORTER_CRED_*} env references, never literal values.
+    mode: "0644"
+  register: importer_config_file
+  notify: Restart importer
+
+- name: Build importer container image
+  community.docker.docker_image:
+    name: "{{ importer_image_name }}"
+    tag: "{{ importer_image_tag }}"
+    source: build
+    build:
+      path: "/home/{{ ansible_user }}/importer-app"
+      dockerfile: Containerfile
+    force_source: "{{ importer_app_files.changed }}"
+  notify: Restart importer
+
+- name: Deploy importer container
+  community.docker.docker_container:
+    name: importer
+    image: "{{ importer_image_name }}:{{ importer_image_tag }}"
+    state: started
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_network_name }}"
+    networks_cli_compatible: true
+    env: "{{ importer_container_env }}"
+    volumes:
+      - "/home/{{ ansible_user }}/importer-config:/etc/importer:ro"
+    # 127.0.0.1 only, unlike the receiver's 0.0.0.0: /status is an operator
+    # endpoint, nothing outside this host needs it — and on this host opening
+    # a firewall port would need sudo nobody has anyway.
+    published_ports:
+      - "127.0.0.1:{{ importer_status_port }}:{{ importer_status_port }}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:{{ importer_status_port }}/healthz', timeout=3)"]
+      interval: 15s
+      retries: 5
+      start_period: 15s
+    # false, not 'never': the VM's community.docker has `pull` as bool-only
+    # (see roles/timescaledb/tasks/main.yml) and the image was just built
+    # locally by the task above.
+    pull: false
+  notify: Restart importer
