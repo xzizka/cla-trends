@@ -557,8 +557,12 @@ class TestPostgres(unittest.TestCase):
         self.assertIn("%(start)s", sql)
         self.assertIn("%(stop)s", sql)
         self.assertNotIn("2026-09-09", sql)
+        # Keys must be exactly the placeholder names psycopg will look up —
+        # anything else fails at execute() with "query parameter missing".
         self.assertEqual(params, {"start": T(2026, 9, 9, 8, 0),
-                                  "end": T(2026, 9, 9, 9, 0)})
+                                  "stop": T(2026, 9, 9, 9, 0)})
+        for key in params:
+            self.assertIn("%%(%s)s" % key, sql)
 
     def test_nulls_and_bools_skipped_non_numeric_raises(self):
         # NULL = no sample there; bool has no DOUBLE PRECISION mapping. But a

@@ -40,6 +40,11 @@ be written `%%`, exactly as everywhere else in psycopg. Both placeholders
 are mandatory: without an upper bound the query would re-read everything
 newer than the watermark on every tick.
 
+The example above aggregates with `time_bucket()` because that is what the
+rest of this stack (TimescaleDB) uses. A plain PostgreSQL server does not
+have that function — use `date_trunc('minute', ts)` there and keep `align`
+equal to the bucket width either way.
+
 Time zone: the time column should be `timestamptz`. A plain `timestamp`
 column is accepted and interpreted as UTC — the whole stack runs in UTC and
 assuming the server's zone for such rows would be a silent shift.
@@ -292,6 +297,11 @@ class PostgresSource(Source):
 
 
 def _bind_window(text, start, end):
-    """Replace the window placeholders with psycopg bind parameters."""
+    """Replace the window placeholders with psycopg bind parameters.
+
+    Keys MUST match the `%(name)s` placeholders left in the SQL — psycopg
+    raises "query parameter missing: stop" otherwise (the live demo caught
+    exactly that: the dict was keyed start/end while the placeholder is stop).
+    """
     return (text.replace("$__start", "%(start)s").replace("$__stop", "%(stop)s"),
-            {"start": start, "end": end})
+            {"start": start, "stop": end})
