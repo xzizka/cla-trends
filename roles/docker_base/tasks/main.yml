@@ -1,6 +1,8 @@
 ---
-# xzizka has NO sudo on this host (Ubuntu 24.04, 192.168.122.115) — unlike
-# fedora-podman, `become` is unusable here. This role therefore does zero
+# xzizka has no *usable* sudo on this host (Ubuntu 24.04, 192.168.122.115):
+# it is in the `sudo` group, but without NOPASSWD, so `sudo -n true` fails and
+# a playbook has no password to offer. Unlike fedora-podman, `become` is
+# therefore unusable here. This role does zero
 # privilege escalation: Docker (daemon + CLI) is assumed already installed
 # and running (apt install docker.io / docker-ce is a one-time root step
 # someone else already did), and xzizka is assumed a member of the `docker`
@@ -16,7 +18,7 @@
 
 - name: Preflight - confirm the Docker CLI/daemon is usable without sudo
   ansible.builtin.command: docker info
-  register: docker_preflight
+  register: docker_base_preflight
   changed_when: false
   failed_when: false
 
@@ -24,13 +26,13 @@
   ansible.builtin.fail:
     msg: >-
       `docker info` failed for {{ ansible_user }} on {{ inventory_hostname }}
-      (rc={{ docker_preflight.rc }}). This host has no sudo for xzizka, so
+      (rc={{ docker_base_preflight.rc }}). This host has no sudo for xzizka, so
       this playbook cannot fix it itself. Most likely cause: xzizka is not in
       the `docker` group yet. Ask whoever has root on this box to run
       `sudo usermod -aG docker {{ ansible_user }}`, then log xzizka out/in
       (or `newgrp docker`) before re-running this playbook.
-      stderr: {{ docker_preflight.stderr | default('') }}
-  when: docker_preflight.rc != 0
+      stderr: {{ docker_base_preflight.stderr | default('') }}
+  when: docker_base_preflight.rc != 0
 
 - name: Ensure the Docker Python SDK is importable by the target's Python (user-site, no sudo)
   ansible.builtin.pip:

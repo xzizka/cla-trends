@@ -42,6 +42,44 @@ plyne (viz níže). Návrh agregace/retenčních vrstev:
   cíli (`ansible_connection: local` v `inventory/hosts.yml`) — spouští se
   tedy přímo na `ubuntu-docker`, ne z control node přes SSH.
 
+## Bootstrap čerstvého cílového hostu
+
+Na `ubuntu-docker` (Ubuntu 24.04) **nebylo nic** — ani ansible, ani pip, ani
+rsync — a narazil jsem na tři překážky, které je potřeba znát dopředu:
+
+| Překážka | Obchvat |
+|---|---|
+| **`galaxy.ansible.com` je z toho hostu nedostupný** (timeout) | nainstalovat **plnou distribuci `ansible`** z PyPI, ne `ansible-core` — má `community.docker` v sobě, takže `ansible-galaxy install` není potřeba |
+| **není pip** a `python3 -m venv` nefunguje (chybí `python3-venv`, `ensurepip`) | bootstrap přes `get-pip.py` do user-site; `pypi.org`, `files.pythonhosted.org` i `bootstrap.pypa.io` dostupné jsou |
+| **není `rsync`** | synchronizovat `tar` přes ssh |
+
+`xzizka` **je** ve skupině `sudo` (na rozdíl od toho, co tvrdil komentář
+v `ansible.cfg`), ale bez passwordless — pro automatizaci je tedy stejně
+nepoužitelný a playbook zůstává bez `become`.
+
+```bash
+# --- na cílovém hostu, jednorázově ---
+curl -fsS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+python3 /tmp/get-pip.py --user --break-system-packages
+export PATH="$HOME/.local/bin:$PATH"      # dej si to do ~/.bashrc
+
+# `ansible`, ne `ansible-core` — kvůli bundlovanému community.docker
+python3 -m pip install --user --break-system-packages ansible ansible-lint docker
+
+# volitelně pro testy: cramjam (load_test.py), psycopg (tests/demo/verify.py)
+python3 -m pip install --user --break-system-packages cramjam "psycopg[binary]"
+```
+
+```bash
+# --- ze workstationu: synchronizace repa (rsync na cíli není) ---
+ssh xzizka@192.168.122.115 'rm -rf ~/CLA-grafana && mkdir -p ~/CLA-grafana'
+tar czf - --exclude='.git' --exclude='__pycache__' . \
+  | ssh xzizka@192.168.122.115 'tar xzf - -C ~/CLA-grafana'
+```
+
+Ověřené verze po instalaci: ansible-core 2.21.4, ansible-lint 26.8.0,
+community.docker 5.3.0, docker SDK 7.2.0, Docker Engine 29.7.2.
+
 ## Nasazení
 
 ```bash
