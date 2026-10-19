@@ -59,6 +59,7 @@
     - "Containerfile"
     - "sources/__init__.py"
     - "sources/base.py"
+    - "sources/postgres.py"
     - "sources/prometheus.py"
     - "sources/influxdb1.py"
     - "sources/influxdb2.py"

@@ -169,16 +169,29 @@ def _build_job(cfg, defaults, where):
 
     schedule = build_schedule(cfg.get("schedule") or {}, where)
 
-    http = HttpClient(
-        auth=cfg.get("auth"),
-        timeout=pick("timeout_seconds"),
-        tls_verify=pick("tls_verify"),
-        retries=pick("retries"),
-        backoff=pick("backoff"),
-        source_name=cfg["name"],
-    )
+    # An HttpClient per source is what gives every HTTP technology the same
+    # auth/retry/scrubbing behaviour — but a non-HTTP source (postgres) has
+    # no endpoint to call, and its `auth` block is libpq credentials that
+    # HttpClient would misread (and reject, e.g. basic without a password).
+    # So the client is only built for plugins that speak HTTP.
+    cls = source_plugins.get(cfg.get("type"), where)
+    http = None
+    if getattr(cls, "uses_http", True):
+        http = HttpClient(
+            auth=cfg.get("auth"),
+            timeout=pick("timeout_seconds"),
+            tls_verify=pick("tls_verify"),
+            retries=pick("retries"),
+            backoff=pick("backoff"),
+            source_name=cfg["name"],
+        )
 
     source = source_plugins.build(cfg, http)
+    # Resolved default, not the raw cfg lookup: for HTTP sources this value
+    # already reached the endpoint via HttpClient; a non-HTTP source (and
+    # any plugin that wants a timeout of its own) reads it from here instead
+    # of re-implementing the defaults merge.
+    source.timeout_seconds = pick("timeout_seconds")
     streams = source.streams()
     if not streams:
         raise ValueError("%s: produced no streams — nothing to import" % where)

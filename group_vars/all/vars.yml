@@ -81,7 +81,7 @@ importer_defaults:
 # keys. `queries[].name` is the watermark key — renaming one makes that
 # stream re-bootstrap from max_lookback, so treat names as stable ids.
 #
-# Worked examples for all three supported types:
+# Worked examples for all four supported types:
 #
 # importer_sources:
 #   - name: prom-main
@@ -139,4 +139,31 @@ importer_defaults:
 #         # bucket with its STOP time, while InfluxQL and TimescaleDB's
 #         # time_bucket() stamp the START — leave the default and this source's
 #         # data sits one interval later than everyone else's in the same table.
+#
+#   - name: pg-app
+#     type: postgres
+#     host: "192.168.122.60"
+#     port: 5432                       # default
+#     database: appdb
+#     sslmode: require                 # volitelné, libpq default 'prefer'
+#     schedule: {every: "1h"}
+#     auth: {type: basic, username: app_reader}
+#     credentials_id: pg_app           # -> IMPORTER_CRED_PG_APP_PASSWORD
+#     queries:
+#       - name: queue_depth
+#         # OBA placeholdery jsou povinné — bez horní hranice by každý běh
+#         # četl znovu všechno novější než watermark.
+#         query: |
+#           SELECT time_bucket('1 minute', created_at) AS ts,
+#                  queue, host, avg(depth) AS depth
+#             FROM queue_stats
+#            WHERE created_at >= $__start AND created_at < $__stop
+#            GROUP BY 1, 2, 3
+#         time_column: ts              # default 'time'
+#         value_column: depth          # default 'value'
+#         label_columns: [queue, host] # default: všechny ostatní sloupce
+#         # MUST match time_bucket('1 minute', ...) — stejný důvod jako
+#         # `align` u Influxu: okraje oken nesmí ukládat neúplné buckety.
+#         align: "1m"
+#         metric_name: app_queue_depth # default: jméno dotazu
 importer_sources: []

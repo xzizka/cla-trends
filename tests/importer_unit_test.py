@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.abspath(APP))
 UTC = timezone.utc
 
 import timespec  # noqa: E402
+from sources.base import SourceError  # noqa: E402
 from timespec import IntervalSchedule, align_down, parse_duration, plan_windows  # noqa: E402
 
 
@@ -474,6 +475,220 @@ class TestInfluxDB2(unittest.TestCase):
         self.assertEqual([r.value for r in rows], [43.5])
 
 
+class TestPostgres(unittest.TestCase):
+    """Drives the plugin through a fake libpq connection.
+
+    The interesting parts are the same contract questions the HTTP plugins
+    answer: the window is bound (never interpolated), rows map onto
+    (ts, metric_name, labels, value), and a misconfigured query fails loudly
+    instead of importing nothing.
+    """
+
+    BASE = {
+        "name": "pg", "type": "postgres", "host": "pg.example", "database": "app",
+        "queries": [{"name": "q", "time_column": "ts", "query":
+                     "SELECT ts, value FROM t WHERE ts >= $__start AND ts < $__stop"}],
+    }
+
+    class FakeCol(object):
+        def __init__(self, name):
+            self.name = name
+
+    class FakeCursor(object):
+        def __init__(self, columns, rows):
+            self.description = [TestPostgres.FakeCol(c) for c in columns]
+            self.rows = rows
+            self.executed = None
+            self.itersize = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.executed = (sql, params)
+
+        def __iter__(self):
+            return iter(self.rows)
+
+    class FakeConn(object):
+        def __init__(self, cursor):
+            self._cursor = cursor
+            self.closed = False
+
+        def cursor(self, name=None):
+            return self._cursor
+
+        def close(self):
+            self.closed = True
+
+    def build(self, cfg, columns, rows):
+        from sources.postgres import PostgresSource
+        PostgresSource.validate(cfg)
+        src = PostgresSource(cfg, None)
+        conn = self.FakeConn(self.FakeCursor(columns, rows))
+        src._connect = lambda: conn
+        return src, conn
+
+    def test_maps_columns_onto_rows(self):
+        src, _ = self.build(self.BASE, ["ts", "value", "host"], [
+            (T(2026, 9, 9, 8, 0), 1.5, "a"),
+            (T(2026, 9, 9, 8, 1), 2.5, "b"),
+        ])
+        rows = list(src.fetch(src.streams()[0], T(2026, 9, 9, 8, 0),
+                              T(2026, 9, 9, 9, 0)))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].ts, T(2026, 9, 9, 8, 0))
+        # metric_name defaults to the query name; leftover columns are labels
+        self.assertEqual(rows[0].metric_name, "q")
+        self.assertEqual(rows[0].labels, {"host": "a"})
+        self.assertEqual(rows[1].value, 2.5)
+
+    def test_window_is_bound_not_interpolated(self):
+        # The rendered SQL must carry placeholders and the timestamps must
+        # travel as parameters — interpolating them would invite quoting
+        # bugs and lose the timestamptz typing the column needs.
+        src, conn = self.build(self.BASE, ["ts", "value"], [])
+        list(src.fetch(src.streams()[0], T(2026, 9, 9, 8, 0),
+                       T(2026, 9, 9, 9, 0)))
+        sql, params = conn._cursor.executed
+        self.assertIn("%(start)s", sql)
+        self.assertIn("%(stop)s", sql)
+        self.assertNotIn("2026-09-09", sql)
+        self.assertEqual(params, {"start": T(2026, 9, 9, 8, 0),
+                                  "end": T(2026, 9, 9, 9, 0)})
+
+    def test_nulls_and_bools_skipped_non_numeric_raises(self):
+        # NULL = no sample there; bool has no DOUBLE PRECISION mapping. But a
+        # string in the explicitly configured value_column is a config bug —
+        # importing it as nothing would hide it, so it raises instead.
+        src, _ = self.build(self.BASE, ["ts", "value"], [
+            (T(2026, 9, 9, 8, 0), None),
+            (T(2026, 9, 9, 8, 1), True),
+        ])
+        self.assertEqual(
+            list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10))),
+            [])
+
+        src, _ = self.build(self.BASE, ["ts", "value"],
+                            [(T(2026, 9, 9, 8, 0), "oops")])
+        with self.assertRaises(SourceError) as ctx:
+            list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertIn("not numeric", str(ctx.exception))
+
+    def test_naive_timestamp_taken_as_utc(self):
+        naive = datetime(2026, 9, 9, 8, 0)  # no tzinfo, like a `timestamp` col
+        src, _ = self.build(self.BASE, ["ts", "value"], [(naive, 1.0)])
+        rows = list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertEqual(rows[0].ts.tzinfo, UTC)
+
+    def test_missing_time_column_raises_with_a_hint(self):
+        src, _ = self.build(self.BASE, ["when", "value"], [])
+        with self.assertRaises(SourceError) as ctx:
+            list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertIn("no time column", str(ctx.exception))
+        # the hint names the configured column, not a hardcoded default
+        self.assertIn("AS ts", str(ctx.exception))
+
+    def test_label_columns_subset_and_missing_reported(self):
+        cfg = dict(self.BASE, queries=[dict(self.BASE["queries"][0],
+                                            label_columns=["host"])])
+        src, _ = self.build(cfg, ["ts", "value", "host", "dc"],
+                            [(T(2026, 9, 9, 8, 0), 1.0, "a", "prg")])
+        rows = list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertEqual(rows[0].labels, {"host": "a"})
+
+        cfg2 = dict(self.BASE, queries=[dict(self.BASE["queries"][0],
+                                             label_columns=["nope"])])
+        src2, _ = self.build(cfg2, ["ts", "value"], [])
+        with self.assertRaises(SourceError) as ctx:
+            list(src2.fetch(src2.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertIn("nope", str(ctx.exception))
+
+    def test_metric_name_and_prefix(self):
+        cfg = dict(self.BASE, queries=[dict(self.BASE["queries"][0],
+                                            metric_name="app_depth")])
+        src, _ = self.build(cfg, ["ts", "value"], [(T(2026, 9, 9, 8, 0), 1.0)])
+        rows = list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+        self.assertEqual(rows[0].metric_name, "app_depth")
+
+    def test_window_placeholders_are_mandatory(self):
+        # An open-ended window cannot duplicate (the runner filters), but it
+        # re-reads everything past the watermark on every tick — refuse at
+        # startup like the other plugins refuse a hardcoded range.
+        from sources.postgres import PostgresSource
+        for missing in ("$__start", "$__stop"):
+            query = "SELECT ts, value FROM t WHERE ts >= $__start AND ts < $__stop"
+            query = query.replace(missing, "ts")
+            cfg = dict(self.BASE, queries=[{"name": "q", "query": query}])
+            with self.assertRaises(ValueError) as ctx:
+                PostgresSource.validate(cfg)
+            self.assertIn(missing, str(ctx.exception))
+
+    def test_auth_validation(self):
+        from sources.postgres import PostgresSource
+        for auth in ({"type": "bearer", "token": "x"},
+                     {"type": "basic"}):  # basic without username
+            cfg = dict(self.BASE, auth=auth)
+            with self.assertRaises(ValueError):
+                PostgresSource.validate(cfg)
+        # username without password is fine (trust/peer setups)
+        PostgresSource.validate(dict(self.BASE,
+                                     auth={"type": "basic", "username": "r"}))
+
+    def test_connect_params(self):
+        import sources.postgres as pgmod
+
+        captured = {}
+        orig = pgmod.psycopg.connect
+        pgmod.psycopg.connect = lambda **kw: captured.update(kw) or "conn"
+        try:
+            src = pgmod.PostgresSource({
+                "name": "pg", "host": "h", "port": 5433, "database": "d",
+                "sslmode": "require",
+                "auth": {"type": "basic", "username": "u", "password": "p"},
+            }, None)
+            src.timeout_seconds = 42
+            self.assertEqual(src._connect(), "conn")
+        finally:
+            pgmod.psycopg.connect = orig
+        self.assertEqual(captured["host"], "h")
+        self.assertEqual(captured["port"], 5433)
+        self.assertEqual(captured["dbname"], "d")
+        self.assertEqual(captured["user"], "u")
+        self.assertEqual(captured["password"], "p")
+        self.assertEqual(captured["sslmode"], "require")
+        self.assertEqual(captured["connect_timeout"], 42)
+        self.assertIn("statement_timeout=42000", captured["options"])
+
+    def test_psycopg_error_becomes_source_error(self):
+        import psycopg
+        from sources.postgres import PostgresSource
+
+        src = PostgresSource(self.BASE, None)
+
+        class BoomConn(object):
+            def cursor(self, name=None):
+                raise psycopg.OperationalError("connection refused")
+
+            def close(self):
+                pass
+
+        src._connect = lambda: BoomConn()
+        with self.assertRaises(SourceError):
+            list(src.fetch(src.streams()[0], T(2026, 9, 9), T(2026, 9, 10)))
+
+    def test_align_and_max_span_become_stream_bounds(self):
+        cfg = dict(self.BASE, max_span="2h",
+                   queries=[dict(self.BASE["queries"][0], align="1m")])
+        src, _ = self.build(cfg, ["ts", "value"], [])
+        stream = src.streams()[0]
+        self.assertEqual(stream.step, timedelta(minutes=1))
+        self.assertEqual(stream.max_span, timedelta(hours=2))
+
+
 class TestLogScrubbing(unittest.TestCase):
     """Credentials must not reach the container log.
 
@@ -522,13 +737,20 @@ class TestRegistry(unittest.TestCase):
     def test_known_types(self):
         import sources
         self.assertEqual(sorted(sources.REGISTRY),
-                         ["influxdb1", "influxdb2", "prometheus"])
+                         ["influxdb1", "influxdb2", "postgres", "prometheus"])
 
     def test_unknown_type_names_the_alternatives(self):
         import sources
         with self.assertRaises(ValueError) as ctx:
             sources.build({"name": "x", "type": "graphite"}, FakeHttp(""))
         self.assertIn("prometheus", str(ctx.exception))
+
+    def test_postgres_declares_itself_as_non_http(self):
+        # config.py uses this to skip building an HttpClient (which would
+        # misread libpq auth as an HTTP auth scheme).
+        from sources.postgres import PostgresSource
+        self.assertFalse(PostgresSource.uses_http)
+
 
 class TestConfig(unittest.TestCase):
     def write(self, text):
@@ -604,6 +826,26 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             config.load(path)
         self.assertIn("max_lookbcak", str(ctx.exception))
+
+    def test_loads_postgres_source_without_http_client(self):
+        # A postgres source has no endpoint; config must not build it an
+        # HttpClient (which would reject libpq auth as an invalid HTTP auth
+        # block) — and must still resolve timeout_seconds onto the plugin.
+        import config
+        path = self.write(
+            "defaults:\n  timeout_seconds: 42\n"
+            "sources:\n"
+            "  - name: pg\n    type: postgres\n    host: pg.example\n"
+            "    database: app\n    schedule: {every: 1h}\n"
+            "    auth: {type: basic, username: reader}\n"
+            "    queries:\n"
+            "      - name: q\n"
+            "        query: 'SELECT ts, value FROM t WHERE ts >= $__start AND ts < $__stop'\n"
+        )
+        jobs = config.load(path)
+        self.assertEqual(len(jobs), 1)
+        self.assertIsNone(jobs[0].source.http)
+        self.assertEqual(jobs[0].source.timeout_seconds, 42)
 
     def test_empty_config_is_valid(self):
         import config

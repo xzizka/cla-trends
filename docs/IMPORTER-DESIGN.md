@@ -12,7 +12,7 @@ Zadání a jak je splněno:
 | Požadavek | Řešení |
 |---|---|
 | aktivní stahování dat | `roles/importer` — samostatná služba s vlastním schedulerem |
-| zdroj Influx nebo Prometheus | tři typy zdroje: `prometheus`, `influxdb1` (InfluxQL), `influxdb2` (Flux) |
+| zdroj Influx, Prometheus nebo PostgreSQL | čtyři typy zdroje: `prometheus`, `influxdb1` (InfluxQL), `influxdb2` (Flux), `postgres` (SQL přes libpq) |
 | více zdrojů současně | `importer_sources` je seznam; každý zdroj běží ve vlastním vlákně |
 | do budoucna přidat další technologie | plugin registr v `sources/` — nová technologie = jeden nový soubor, viz níže |
 | spouštění časem, per zdroj | `schedule: {every: 1h}` nebo `schedule: {cron: "0 3 * * *", timezone: ...}`, definované u každého zdroje zvlášť |
@@ -24,8 +24,9 @@ Zadání a jak je splněno:
 Externí Prometheus ──remote_write──►  receiver  (:9201, push)   ─┐
                                                                  │
 Externí Prometheus  ◄──query_range──┐                            │
-Externí InfluxDB 1.x ◄──InfluxQL────┤ importer (:9202, pull)  ───┤
-Externí InfluxDB 2.x ◄──Flux────────┘   │                        │
+Externí InfluxDB 1.x ◄──InfluxQL────┤                            │
+Externí InfluxDB 2.x ◄──Flux────────┤ importer (:9202, pull)  ───┤
+Externí PostgreSQL  ◄──SQL──────────┘   │                        │
                                         │ watermark              │
                                         ▼                        ▼
                               importer_state          TimescaleDB / metrics_raw
@@ -149,8 +150,8 @@ Mimo `sources/` se nemusí měnit nic.
 
 ## Omezení a záměrná zjednodušení
 
-- **Zdroj musí umět odpovědět na časový rozsah.** To Prometheus i
-  Influx umí; technologie, která zvládá jen "aktuální hodnotu", by při
+- **Zdroj musí umět odpovědět na časový rozsah.** To Prometheus, Influx i
+  Postgres umí; technologie, která zvládá jen "aktuální hodnotu", by při
   hodinovém intervalu dala 1 bod za hodinu. Pro takový zdroj je vhodnější
   receiver (push) nebo krátký interval.
 - **Žádné native histogramy** — stejné omezení jako u receiveru,
@@ -158,7 +159,9 @@ Mimo `sources/` se nemusí měnit nic.
 - **`NaN` / `±Inf` se zahazují.** Jsou to legitimní hodnoty Promethea, ale v
   `avg()`/`sum()` v continuous aggregates otráví celý bucket.
 - **Nenumerické hodnoty se zahazují** (stringová pole v Influxu, boolean) —
-  v `DOUBLE PRECISION` je nelze reprezentovat.
+  v `DOUBLE PRECISION` je nelze reprezentovat. U Postgresu se to týká jen
+  NULL/boolean; string ve explicitně nastaveném `value_column` je chyba
+  konfigurace a importer hlásí chybu místo tichého přeskočení.
 - **Streamy jednoho zdroje běží sériově**, různé zdroje paralelně. Zatížení
   jednoho endpointu je tak předvídatelné a mrtvý Influx nezdrží Prometheus.
 - **`/status` neběží na LAN** (jen `127.0.0.1`). Otevírat port ve firewallu by
@@ -179,7 +182,9 @@ zdroje, kterýkoli klíč jde přebít u konkrétního zdroje):
 | `run_on_start` | `true` | naimportovat hned při startu, ne až na první tik |
 
 Per zdroj/dotaz navíc: `step` (Prometheus, resoluce range dotazu),
-`align` (Influx, zarovnání oken), `max_span` (strop velikosti
+`align` (Influx a Postgres, zarovnání oken), `max_span` (strop velikosti
 jednoho okna), `max_points_per_request` (Prometheus, default 9000 — jeho
 limit je 11000), `metric_name`, `metric_prefix`, `field_suffix`,
-`extra_labels`, `enabled`.
+`extra_labels`, `enabled`. U postgres zdroje navíc `host`, `port`,
+`database`, `sslmode` a v dotazu `time_column` / `value_column` /
+`label_columns` (defaulty `time` / `value` / všechny ostatní sloupce).

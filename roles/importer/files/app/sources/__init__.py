@@ -26,19 +26,23 @@ def register(type_name):
     return deco
 
 
-def build(cfg: dict, http) -> Source:
-    """Instantiate the plugin for one source config block."""
-    type_name = cfg.get("type")
+def get(type_name, where="source"):
+    """Return the plugin class registered for `type`, or raise."""
     if type_name not in REGISTRY:
         raise ValueError(
-            "unknown source type %r — known types: %s"
-            % (type_name, ", ".join(sorted(REGISTRY)))
+            "%s: unknown type %r — known types: %s"
+            % (where, type_name, ", ".join(sorted(REGISTRY)))
         )
-    cls = REGISTRY[type_name]
+    return REGISTRY[type_name]
+
+
+def build(cfg: dict, http) -> Source:
+    """Instantiate the plugin for one source config block."""
+    cls = get(cfg.get("type"), "source %r" % cfg.get("name", "?"))
     cls.validate(cfg)
     return cls(cfg, http)
 
 
 # Importing these modules is what runs their @register decorators. Add new
 # technologies to this list.
-from . import influxdb1, influxdb2, prometheus  # noqa: E402,F401
+from . import influxdb1, influxdb2, postgres, prometheus  # noqa: E402,F401

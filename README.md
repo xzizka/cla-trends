@@ -42,7 +42,8 @@ plyne (viz níže). Návrh agregace/retenčních vrstev:
   cíli (`ansible_connection: local` v `inventory/hosts.yml`) — spouští se
   tedy přímo na `ubuntu-docker`, ne z control node přes SSH.
 
-EN
+## Nasazení
+
 ```bash
 ansible-playbook playbook.yml
 ```
@@ -92,8 +93,9 @@ souboru jsou zakomentované funkční příklady pro všechny tři podporované 
 Detaily návrhu: [`docs/IMPORTER-DESIGN.md`](docs/IMPORTER-DESIGN.md).
 
 Podporované `type`: `prometheus` (PromQL `query_range`), `influxdb1`
-(InfluxQL), `influxdb2` (Flux). Přidání další technologie = jeden nový soubor
-v `roles/importer/files/app/sources/` — postup v IMPORTER-DESIGN.md.
+(InfluxQL), `influxdb2` (Flux), `postgres` (SQL přes libpq). Přidání další
+technologie = jeden nový soubor v `roles/importer/files/app/sources/` —
+postup v IMPORTER-DESIGN.md.
 
 **1. Hesla/tokeny nepatří do `vars.yml`** (není šifrovaný). U zdroje se uvede
 jen `credentials_id`, a vlastní tajemství se přidá do vaultu:
@@ -173,6 +175,10 @@ zaloguje varování — nasazení se tím nerozbije.
 - Influx dotaz musí použít `$timeFilter` (v1) resp. `range(start: $__start,
   stop: $__stop)` (v2). Pevný rozsah typu `range(start: -1h)` by při každém
   běhu naimportoval totéž znovu — playbook/importer to odmítne při startu.
+- SQL dotaz (postgres) musí použít `$__start`/`$__stop` — obojí je
+  povinné. Odesílají se jako parametry dotazu (ne v textu SQL), takže
+  procento v SQL (např. `LIKE 'x%'`) se píše jako `%%`. Sloupec s časem
+  má být `timestamptz`; obyčejný `timestamp` se bere jako UTC.
 - **U Fluxu vždy `timeSrc: "_start"` v `aggregateWindow()`.** Flux defaultně
   označí bucket jeho koncem, InfluxQL a `time_bucket()` jeho začátkem — bez
   toho jsou data z InfluxDB 2.x o jeden interval posunutá proti všem ostatním
@@ -182,10 +188,10 @@ zaloguje varování — nasazení se tím nerozbije.
 
 ## Unit testy importeru
 
-Běží offline — bez TimescaleDB, bez Promethea, bez Influxu (HTTP odpovědi se
-přehrávají z fixtures, DB je stubnutá). Ověřují půlotevřenost a spojitost
-oken, chování watermarku, zarovnání na mřížku a parsování odpovědí všech tří
-typů zdroje:
+Běží offline — bez TimescaleDB, bez Promethea, bez Influxu, bez Postgresu
+(HTTP odpovědi se přehrávají z fixtures, DB je stubnutá). Ověřují
+půlotevřenost a spojitost oken, chování watermarku, zarovnání na mřížku a
+parsování odpovědí všech čtyř typů zdroje:
 
 ```bash
 python3 tests/importer_unit_test.py
