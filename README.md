@@ -127,7 +127,7 @@ ne native histograms — viz omezení v `docs/AGGREGATION-DESIGN.md`.
 
 Importer si data sám stahuje (na rozdíl od receiveru, který na ně čeká).
 Zdroje se definují v `importer_sources` v `group_vars/all/vars.yml`; v tom
-souboru jsou zakomentované funkční příklady pro všechny tři podporované typy.
+souboru jsou zakomentované funkční příklady pro všechny čtyři podporované typy.
 Detaily návrhu: [`docs/IMPORTER-DESIGN.md`](docs/IMPORTER-DESIGN.md).
 
 Podporované `type`: `prometheus` (PromQL `query_range`), `influxdb1`
