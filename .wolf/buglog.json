@@ -498,5 +498,42 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-09-16T18:20:00Z"
+  },
+  {
+    "id": "bug-028",
+    "timestamp": "2026-10-19T15:29:00Z",
+    "error_message": "postgres source failed on its very first live query: \"query 'queue_depth_1m' failed on demo-pg: query parameter missing: stop\"",
+    "file": "roles/importer/files/app/sources/postgres.py",
+    "root_cause": "_bind_window() rewrote $__stop to the psycopg placeholder %(stop)s but keyed the parameter dict {\"start\": ..., \"end\": ...}. psycopg resolves %(name)s by key, so the 'stop' key was simply absent. The unit test asserted the buggy dict verbatim and its fake cursor never binds parameter names, so 77 green tests hid it; only a real psycopg against a real server executes the placeholder lookup.",
+    "fix": "Return {\"start\": start, \"stop\": end}, and make the test derive the expected keys from the placeholders found in the SQL (asserts each param key has a matching %(key)s), so key/placeholder drift can no longer pass.",
+    "tags": [
+      "postgres",
+      "psycopg",
+      "parameters",
+      "test-gap",
+      "live-demo"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-10-19T15:29:00Z"
+  },
+  {
+    "id": "bug-029",
+    "timestamp": "2026-10-19T15:22:00Z",
+    "error_message": "demo-postgres (postgres:18-alpine) exited immediately with \"PostgreSQL data in /var/lib/postgresql/data (unused mount/volume)\"",
+    "file": "tests/demo/target-demo-sources.sh",
+    "root_cause": "Since PostgreSQL 18 the official image keeps PGDATA in a version-specific subdirectory and expects a single mount at /var/lib/postgresql; a volume mounted at /var/lib/postgresql/data is treated as an unused leftover and the entrypoint refuses to start. The leftover volume from the failed first attempt then poisoned every retry.",
+    "fix": "Mount the named volume at /var/lib/postgresql, remove the volume created by the bad attempt, and make the readiness loop fail hard (with container logs) instead of silently continuing to seed a dead container.",
+    "tags": [
+      "postgres",
+      "docker",
+      "volume",
+      "postgres-18",
+      "demo",
+      "test"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-10-19T15:22:00Z"
   }
 ]

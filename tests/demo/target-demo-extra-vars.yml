@@ -31,6 +31,7 @@ importer_defaults:
 vault_importer_env:
   IMPORTER_CRED_DEMO_INFLUX1_PASSWORD: "demo-reader-pw"
   IMPORTER_CRED_DEMO_INFLUX2_TOKEN: "demo-influx2-token-0123456789"
+  IMPORTER_CRED_DEMO_PG_PASSWORD: "demo-reader-pw"
 
 importer_sources:
   - name: demo-prom
@@ -96,3 +97,35 @@ importer_sources:
             |> aggregateWindow(every: 1m, fn: mean, createEmpty: false,
                                timeSrc: "_start")
         metric_prefix: "demo_"
+
+  - name: demo-pg
+    type: postgres
+    host: demo-postgres
+    port: 5432
+    database: demo
+    schedule:
+      every: "1m"
+    auth:
+      type: basic
+      username: demo_reader
+    credentials_id: demo_pg
+    extra_labels:
+      demo: "postgres"
+    queries:
+      # Seed invariant: depth == floor(epoch(ts)/60) at second precision, so
+      # avg() within the minute bucket is that same integer — verify.py checks
+      # value == floor(epoch/60) on every imported row. align MUST match the
+      # bucket width, see IMPORTER-DESIGN.md. date_trunc, not time_bucket():
+      # the target is plain PostgreSQL, where TimescaleDB functions (and the
+      # extension) do not exist.
+      - name: queue_depth_1m
+        align: "1m"
+        time_column: ts
+        value_column: depth
+        query: |
+          SELECT date_trunc('minute', ts) AS ts,
+                 queue, host,
+                 avg(depth) AS depth
+            FROM queue_stats
+           WHERE ts >= $__start AND ts < $__stop
+           GROUP BY 1, 2, 3

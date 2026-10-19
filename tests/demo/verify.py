@@ -204,6 +204,21 @@ class Checks(object):
             "clean" if leaked == 0 else "%d row(s) carry an internal column" % leaked,
         )
 
+    def pg_rows_mapped(self):
+        """The SQL source's result: columns mapped onto metric_name/labels."""
+        rows = self.q(
+            "SELECT DISTINCT labels->>'queue', labels->>'host'"
+            "  FROM metrics_raw WHERE labels->>'source' = 'demo-pg'"
+            " ORDER BY 1, 2")
+        pairs = [(r[0], r[1]) for r in rows]
+        expected = [("orders", "app-1"), ("orders", "app-2"),
+                    ("payments", "app-1")]
+        self.check(
+            "demo-pg: queue/host columns became labels",
+            pairs == expected,
+            "found %s" % (pairs or "NO ROWS"),
+        )
+
     def watermarks(self, expected_streams):
         rows = self.q(
             "SELECT source_name, stream_key, last_ts, last_rows"
@@ -264,6 +279,10 @@ def main():
                     default="postgresql://postgres:demo-super-pw@127.0.0.1:15432/metrics")
     ap.add_argument("--influx-buckets", type=int, required=True,
                     help="number of complete 1-minute buckets seed.py wrote")
+    ap.add_argument("--pg-buckets", type=int, default=None,
+                    help="also verify the demo-postgres SQL source; value is "
+                         "the number of complete 1-minute buckets of "
+                         "queue_stats rows seeded by target-demo-sources.sh")
     args = ap.parse_args()
 
     with psycopg.connect(args.dsn, autocommit=False) as conn:
@@ -273,13 +292,23 @@ def main():
         print("Verifying what the importer wrote to metrics_raw")
         print("=" * 72)
 
+        expected_sources = ["demo-prom", "demo-influx1", "demo-influx2"]
+        if args.pg_buckets is not None:
+            expected_sources.append("demo-pg")
         c.labels_are_jsonb_objects()
-        c.sources_present(["demo-prom", "demo-influx1", "demo-influx2"])
+        c.sources_present(expected_sources)
         c.no_duplicates()
 
         # 2 hosts x 2 fields, and 2 hosts x 1 field
         c.seeded_values_exact("demo-influx1", args.influx_buckets * 4)
         c.seeded_values_exact("demo-influx2", args.influx_buckets * 2)
+
+        if args.pg_buckets is not None:
+            # 3 (queue, host) series seeded per minute, aggregated by
+            # date_trunc('minute', ...) into one row each.
+            c.seeded_values_exact("demo-pg", args.pg_buckets * 3)
+            c.pg_rows_mapped()
+            c.metric_names("demo-pg", ["queue_depth_1m"])
 
         c.metric_names("demo-influx1", ["demo_cpu_load_mean", "demo_cpu_temp_mean"])
         c.metric_names("demo-influx2", ["demo_mem_used_percent"])
@@ -289,13 +318,16 @@ def main():
 
         c.extra_labels()
         c.no_internal_columns_leaked()
-        c.watermarks([
+        watermarks = [
             ("demo-prom", "prom_up"),
             ("demo-prom", "prom_goroutines"),
             ("demo-prom", "prom_scrape_rate"),
             ("demo-influx1", "cpu_1m"),
             ("demo-influx2", "mem_1m"),
-        ])
+        ]
+        if args.pg_buckets is not None:
+            watermarks.append(("demo-pg", "queue_depth_1m"))
+        c.watermarks(watermarks)
         c.rollups_populated()
 
         return c.report()

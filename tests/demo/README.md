@@ -74,6 +74,16 @@ Obojí by unit testy se stubnutou DB najít nemohly:
   konzistentně o 1 minutu vedle. Není to chyba importeru, ale semantika
   Fluxu, kterou importer nemá jak detekovat. Řešení: `timeSrc: "_start"`
   v dotazu, zdokumentováno na 4 místech.
+- **bug-028**: postgres plugin vázal `$__stop` jako `%(stop)s`, ale do
+  parametrů posílal klíč `"end"` → psycopg spadl na `query parameter
+  missing: stop` při prvním živém dotazu. Unit test tvrdil přesně ten
+  chybný dict a fake cursor jména parametrů neověřuje, takže 77 zelených
+  testů chybu schovalo; odhalil ji až skutečný psycopg nad skutečnou DB.
+  Test teď odvozuje očekávané klíče z placeholderů v SQL.
+- **bug-029**: `postgres:18-alpine` od PostgreSQL 18 vyžaduje volume na
+  `/var/lib/postgresql`, ne na `/var/lib/postgresql/data` — jinak
+  entrypoint odmítne nastartovat. Demo skript to má opravené a readiness
+  loop nově tvrdě selže i s logy, místo aby tiše seedoval mrtvý kontejner.
 
 ## Ruční kontroly nad běžícím stackem
 
@@ -104,13 +114,19 @@ které má nejvyšší precedenci:
 ```bash
 # na cílovém hostu, v ~/CLA-grafana
 ./tests/demo/target-demo-sources.sh up        # nastartuje + naseeduje zdroje
+# kromě Promethea a obou Influxů postaví i plain PostgreSQL (postgres:18-alpine)
+# s tabulkou queue_stats — SQL plugin se testuje proti skutečnému PostgreSQL,
+# ne proti TimescaleDB, takže dotaz používá date_trunc(), ne time_bucket()
 ansible-playbook playbook.yml -e @tests/demo/target-demo-extra-vars.yml
 
 # ověření (potřebuje psycopg: pip install --user --break-system-packages "psycopg[binary]")
 SUPER=$(ansible-vault view group_vars/all/vault.yml \
         | sed -nE 's/^vault_timescaledb_superuser_password:[[:space:]]*"?([^"]*)"?$/\1/p')
 python3 tests/demo/verify.py \
-  --dsn "postgresql://postgres:$SUPER@127.0.0.1:5432/metrics" --influx-buckets 120
+  --dsn "postgresql://postgres:$SUPER@127.0.0.1:5432/metrics" \
+  --influx-buckets 120 --pg-buckets 118
+# --pg-buckets = HOURS_BACK*60 - 2: target-demo-sources.sh seeduje do
+# now_min-3 včetně, takže poslední dvě minuty zůstávají nedotčené
 
 # úklid zpátky do produkčního stavu
 ansible-playbook playbook.yml                 # importer zpět na prázdné zdroje
