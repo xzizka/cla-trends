@@ -1,0 +1,95 @@
+# Demo importer config — mirrors what roles/importer/templates/sources.yml.j2
+# renders, but written by hand so the demo needs no Ansible run.
+#
+# Exercises all three source types against real endpoints, plus the two
+# awkward cases each backend has:
+#   * Prometheus: a plain instant-vector (has __name__) and a rate()
+#     expression (has NO __name__, needs metric_name)
+#   * InfluxDB 1.x: $timeFilter expansion, GROUP BY time() + align, multiple
+#     fields in one measurement
+#   * InfluxDB 2.x: Flux $__start/$__stop, aggregateWindow + align
+---
+defaults:
+  timeout_seconds: 30
+  # The seeded Influx points are backdated up to 2h, and the demo Prometheus
+  # only has a minute of history, so a 1-day lookback covers everything while
+  # keeping the first-run backfill small.
+  max_lookback: "1d"
+  end_lag: "0s"
+  tls_verify: false
+  retries: 2
+  run_on_start: true
+
+sources:
+  - name: demo-prom
+    type: prometheus
+    url: "http://demo-prometheus:9090"
+    # 1m rather than 1h so the demo can watch several ticks go by; the
+    # watermark logic is identical either way.
+    schedule:
+      every: "1m"
+    step: "15s"
+    extra_labels:
+      demo: "prometheus"
+    queries:
+      # instant vector: __name__ comes from Prometheus itself
+      - name: prom_up
+        query: 'up'
+      - name: prom_goroutines
+        query: 'go_goroutines'
+      # rate() drops __name__ entirely -> metric_name is mandatory here,
+      # otherwise the samples would be stored under the query name
+      - name: prom_scrape_rate
+        query: 'rate(prometheus_http_requests_total[1m])'
+        metric_name: "prometheus_http_requests_rate"
+
+  - name: demo-influx1
+    type: influxdb1
+    url: "http://demo-influxdb1:8086"
+    database: demo
+    schedule:
+      every: "1m"
+    auth:
+      type: basic
+      username: demo_reader
+      password: "demo-reader-pw"
+    extra_labels:
+      demo: "influxdb1"
+    queries:
+      # two fields in one measurement -> two metric names (cpu_load_mean,
+      # cpu_temp_mean), distinguished by the field-name suffix
+      - name: cpu_1m
+        query: >-
+          SELECT mean("load") AS load_mean, mean("temp") AS temp_mean
+          FROM "cpu" WHERE $timeFilter
+          GROUP BY time(1m), "host" fill(none)
+        # must match GROUP BY time(1m) or every window edge stores a partial
+        # bucket averaged over a few seconds instead of a minute
+        align: "1m"
+        metric_prefix: "demo_"
+
+  # NOTE the timeSrc: "_start" in the Flux query below — without it Flux
+  # stamps each bucket with its STOP time and the imported data sits one
+  # interval later than the same data imported via InfluxQL. See
+  # docs/IMPORTER-DESIGN.md.
+  - name: demo-influx2
+    type: influxdb2
+    url: "http://demo-influxdb2:8086"
+    org: demo-org
+    schedule:
+      every: "1m"
+    auth:
+      type: token
+      token: "demo-influx2-token-0123456789"
+    extra_labels:
+      demo: "influxdb2"
+    queries:
+      - name: mem_1m
+        align: "1m"
+        query: |
+          from(bucket: "demo-bucket")
+            |> range(start: $__start, stop: $__stop)
+            |> filter(fn: (r) => r._measurement == "mem")
+            |> aggregateWindow(every: 1m, fn: mean, createEmpty: false,
+                               timeSrc: "_start")
+        metric_prefix: "demo_"

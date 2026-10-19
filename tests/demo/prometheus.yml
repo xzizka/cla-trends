@@ -1,0 +1,13 @@
+# Demo Prometheus: scrapes itself, so it produces real metrics with no extra
+# exporter to deploy. 5s interval so a useful number of points accumulates in
+# the minute or so the demo waits before importing.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          demo: "self-scrape"

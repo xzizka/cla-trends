@@ -1,0 +1,31 @@
+# Prometheus as the *generator* half of the Mimir import test: scrape the dummy
+# exporter every 30s and remote_write the result into Mimir.
+#
+# It is deliberately a full Prometheus, not agent mode: keeping its own TSDB
+# gives verify_mimir.py an independent source of truth to cross-check what the
+# importer stored in metrics_raw against.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  external_labels:
+    demo_stack: mimir
+
+scrape_configs:
+  - job_name: demo-exporter
+    static_configs:
+      - targets: ["demo-mimir-exporter:9300"]
+
+remote_write:
+  - url: http://demo-mimir:8080/api/v1/push
+    # Mimir runs multi-tenant here, so every write must name its tenant.
+    headers:
+      X-Scope-OrgID: demo
+    # Ship only the 20 demo gauges. Prometheus' own synthetic series (up,
+    # scrape_duration_seconds, ...) would otherwise land in Mimir too and
+    # "Mimir holds exactly the 20 metrics under test" would stop being true.
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: "demo_gauge_.+"
+        action: keep
+    queue_config:
+      max_samples_per_send: 500

@@ -1,0 +1,69 @@
+# One-off --extra-vars overlay pointing a LIVE deployment's importer at the
+# demo Mimir from mimir-demo.sh.
+#
+# Kept out of group_vars on purpose: production config stays clean, extra-vars
+# has the highest precedence, and reverting is just running the playbook again
+# without this file.
+#
+#   ./tests/demo/mimir/mimir-demo.sh up 4
+#   ansible-playbook playbook.yml -e @tests/demo/mimir/mimir-demo-extra-vars.yml
+#   ...wait, then: python3 tests/demo/mimir/verify_mimir.py
+#   ansible-playbook playbook.yml            # back to the real (empty) config
+#   ./tests/demo/mimir/mimir-demo.sh down
+---
+importer_defaults:
+  timeout_seconds: 30
+  # The generator starts empty, so there is nothing older to backfill; 6h only
+  # has to comfortably cover the 4h run plus the time it takes to notice.
+  max_lookback: "6h"
+  # NOT 0s, and this is the one setting that decides whether the test can lie.
+  # query_range answers each grid point with the last sample at or before it,
+  # so importing right up to `now` would stamp the newest grid point with a
+  # stale value whenever remote_write has not delivered the latest scrape yet —
+  # and the watermark would then move past it, making the error permanent
+  # rather than self-healing on the next tick.
+  end_lag: "2m"
+  tls_verify: false
+  retries: 3
+  run_on_start: true
+
+# Demo tenant id only — no real secret. Routed through the credentials
+# mechanism anyway so this exercises the same vault -> container env ->
+# ${IMPORTER_CRED_*} path a real X-Scope-OrgID would take, including the
+# role's credential preflight.
+vault_importer_env:
+  IMPORTER_CRED_DEMO_MIMIR_VALUE: "demo"
+
+importer_sources:
+  - name: demo-mimir
+    type: prometheus
+    # Mimir serves the Prometheus-compatible query API under /prometheus;
+    # the plugin appends /api/v1/query_range to whatever is configured here.
+    url: "http://demo-mimir:8080/prometheus"
+    schedule:
+      every: "10m"
+    # Matches the generator's scrape_interval. A coarser step would silently
+    # decimate the data; a finer one would repeat samples across grid points.
+    step: "30s"
+    auth:
+      # Mimir runs multi-tenant, so reads need the tenant header too. Note the
+      # importer's auth is one-of: a header and a bearer token cannot both be
+      # set on the same source (httpclient._apply_auth is an if/elif chain).
+      type: header
+      name: X-Scope-OrgID
+    credentials_id: demo_mimir
+    extra_labels:
+      demo: "mimir"
+    queries:
+      # One selector covers all 20 gauges: each series keeps its own __name__,
+      # so they land under their real metric names from a single stream and a
+      # single watermark.
+      - name: demo_gauges
+        query: '{__name__=~"demo_gauge_.+"}'
+      # Second stream on purpose: an aggregation has no __name__ at all, so
+      # this also proves the metric_name override path works against Mimir.
+      # Its value is independently checkable — sum(epoch+i for i in 0..19)
+      # is 20*epoch + 190.
+      - name: demo_gauges_sum
+        query: 'sum by (job) ({__name__=~"demo_gauge_.+"})'
+        metric_name: demo_gauge_sum

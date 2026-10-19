@@ -1,0 +1,60 @@
+# Grafana Mimir — monolithic single-binary demo config (-target=all).
+#
+# NOT a production config: replication factor 1, filesystem blocks storage in
+# one container, single-node memberlist ring. It exists only to give the
+# importer a real Mimir to read from.
+#
+# Two settings are load-bearing for this test:
+#   * multitenancy_enabled: true — so a tenant header is genuinely required and
+#     the importer's `auth: {type: header}` path is actually exercised, rather
+#     than the test passing because nothing checked.
+#   * server.http_listen_port: 8080 — the query API then lives under
+#     /prometheus/api/v1/..., which is what the importer's `url` points at.
+multitenancy_enabled: true
+
+server:
+  http_listen_port: 8080
+  grpc_listen_port: 9095
+  log_level: info
+
+# Default is ./metrics-activity.log relative to the working directory, which
+# the image's unprivileged user cannot write to.
+activity_tracker:
+  filepath: /data/metrics-activity.log
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/blocks
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+  tsdb:
+    dir: /data/tsdb
+
+compactor:
+  data_dir: /data/compactor
+  sharding_ring:
+    kvstore:
+      store: memberlist
+
+distributor:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+
+ingester:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: memberlist
+    replication_factor: 1
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/rules
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 1

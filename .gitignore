@@ -2,3 +2,4 @@
 *.retry
 __pycache__/
 *.pyc
+final-check.log

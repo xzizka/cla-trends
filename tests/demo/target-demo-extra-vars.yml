@@ -1,0 +1,98 @@
+# One-off --extra-vars overlay for verifying a LIVE deployment's importer
+# against the demo endpoints from target-demo-sources.sh.
+#
+# Kept out of group_vars on purpose: production config stays clean, and
+# extra-vars has the highest precedence so nothing has to be edited and
+# reverted afterwards.
+#
+#   ./tests/demo/target-demo-sources.sh up
+#   ansible-playbook playbook.yml -e @tests/demo/target-demo-extra-vars.yml
+#   ...verify...
+#   ansible-playbook playbook.yml            # back to the real (empty) config
+#   ./tests/demo/target-demo-sources.sh down
+#
+# Hostnames are container names on the stack's `metrics` network, which is
+# exactly how the importer reaches timescaledb — so this also proves the
+# container's own DNS/network path, not just the code.
+---
+importer_defaults:
+  timeout_seconds: 30
+  # Seeded points go 2 h back and the demo Prometheus has only minutes of
+  # history, so 1d covers everything while keeping the first backfill small.
+  max_lookback: "1d"
+  end_lag: "0s"
+  tls_verify: false
+  retries: 2
+  run_on_start: true
+
+# Demo credentials only — real secrets live in vault_importer_env. This
+# override replaces that map for the duration of the run, which is fine
+# because the production config has no sources needing credentials yet.
+vault_importer_env:
+  IMPORTER_CRED_DEMO_INFLUX1_PASSWORD: "demo-reader-pw"
+  IMPORTER_CRED_DEMO_INFLUX2_TOKEN: "demo-influx2-token-0123456789"
+
+importer_sources:
+  - name: demo-prom
+    type: prometheus
+    url: "http://demo-prometheus:9090"
+    schedule:
+      every: "1m"
+    step: "15s"
+    extra_labels:
+      demo: "prometheus"
+    queries:
+      - name: prom_up
+        query: 'up'
+      - name: prom_goroutines
+        query: 'go_goroutines'
+      # rate() carries no __name__ -> metric_name is mandatory
+      - name: prom_scrape_rate
+        query: 'rate(prometheus_http_requests_total[1m])'
+        metric_name: "prometheus_http_requests_rate"
+
+  - name: demo-influx1
+    type: influxdb1
+    url: "http://demo-influxdb1:8086"
+    database: demo
+    schedule:
+      every: "1m"
+    auth:
+      type: basic
+      username: demo_reader
+    credentials_id: demo_influx1
+    extra_labels:
+      demo: "influxdb1"
+    queries:
+      - name: cpu_1m
+        query: >-
+          SELECT mean("load") AS load_mean, mean("temp") AS temp_mean
+          FROM "cpu" WHERE $timeFilter
+          GROUP BY time(1m), "host" fill(none)
+        align: "1m"
+        metric_prefix: "demo_"
+
+  - name: demo-influx2
+    type: influxdb2
+    url: "http://demo-influxdb2:8086"
+    org: demo-org
+    schedule:
+      every: "1m"
+    auth:
+      type: token
+    credentials_id: demo_influx2
+    extra_labels:
+      demo: "influxdb2"
+    queries:
+      - name: mem_1m
+        align: "1m"
+        # timeSrc: "_start" is NOT optional — Flux otherwise stamps each
+        # bucket with its STOP time and this source lands one interval later
+        # than everyone else in the same table (bug-022).
+        query: |
+          from(bucket: "demo-bucket")
+            |> range(start: $__start, stop: $__stop)
+            |> filter(fn: (r) => r._measurement == "mem")
+            |> aggregateWindow(every: 1m, fn: mean, createEmpty: false,
+                               timeSrc: "_start")
+        metric_prefix: "demo_"
