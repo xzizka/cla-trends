@@ -305,6 +305,12 @@
 - psql does not substitute `:'var'` inside `DO $$ ... $$`; use
   `SELECT format(...) \gexec` for parameterised CREATE/ALTER ROLE.
 
+- 2026-10-22: compose deployment is LIVE on ubuntu-docker in `~/cla-metrics`
+  (project `cla-metrics`, generated passwords in its `.env`, empty sources).
+  The VM was clean beforehand (no Ansible stack) — the Ansible deployment and
+  this one would collide on ports 3000/9201/5432/9202, never run both. First
+  `docker compose up` there took 4m40s, almost all of it Docker Hub pulls.
+
 ## Do-Not-Repeat
 - 2026-09-01: Don't leave `[privilege_escalation] become = True` as a global
   ansible.cfg default in a mixed root/rootless-user playbook — scope `become:
