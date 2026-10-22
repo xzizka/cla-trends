@@ -1,7 +1,8 @@
 #!/bin/sh
 # Apply schema, continuous aggregates, policies and roles/grants to a running
 # TimescaleDB. Every file is idempotent, so this runs on every
-# `docker compose up` (service `db-init`), not only on first start.
+# `docker compose up` (service `db-init`, stock timescaledb image with this
+# directory mounted at /opt/sql-init), not only on first start.
 #
 # Connection: standard libpq env (PGHOST, PGUSER, PGPASSWORD, PGDATABASE).
 set -eu

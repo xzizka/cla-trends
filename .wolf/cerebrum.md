@@ -297,11 +297,13 @@
 - The workstation's docker is a **snap**: it cannot see `/tmp` (compose
   reports `/var/lib/snapd/void/...`). Bind mounts / compose projects for
   local tests must live under `$HOME`.
-- Docker Hub account `lojdr` is logged in on the workstation; images are
-  published as `lojdr/cla-*` with one shared stack version tag + `latest`.
+- Docker Hub account `lojdr` is logged in on the workstation. User wants
+  STOCK `timescale/timescaledb` + `grafana/grafana` images (not custom-baked
+  ones) and only `lojdr/metrics-receiver` / `lojdr/metrics-importer` as own
+  images (2026-10-22, replaced the short-lived `lojdr/cla-*` set).
 - In a compose deployment, Grafana dashboards must NOT be baked under
   `/var/lib/grafana` (a named volume keeps the first image's copy forever);
-  they live in `/etc/grafana/dashboards` in the cla-grafana image.
+  they are bind-mounted at `/etc/grafana/dashboards`.
 - psql does not substitute `:'var'` inside `DO $$ ... $$`; use
   `SELECT format(...) \gexec` for parameterised CREATE/ALTER ROLE.
 
@@ -335,6 +337,10 @@
 - 2026-10-22: Don't trust an old default compose/env file to keep working on
   `restart` after editing an env_file — `docker compose restart` keeps the old
   env; `up -d <svc>` is what recreates the container with new env.
+
+- 2026-10-22: Don't bake config/schema into custom images of upstream
+  components (cla-timescaledb/cla-grafana) — user prefers stock images with
+  bind-mounted files from the compose dir.
 
 ## Decision Log
 - 2026-10-22: Compose deployment uses 4 custom images incl. TimescaleDB and

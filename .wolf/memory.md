@@ -79,3 +79,4 @@
 
 | 10:15 | upgrade (TimescaleDB 2.31.0-pg18, python 3.15.1-slim, pip pins), importer `headers:` + YAML error fix, 4 Hub images lojdr/cla-*, deploy/compose + Czech guide; e2e compose test incl. header-gated Prometheus, 82 unit tests green | docker/, deploy/compose/, roles/importer/files/app/*, group_vars, README | ok | ~60k |
 | 10:26 | deployed compose stack from lojdr/cla-*:1.1.0 to ubuntu-docker ~/cla-metrics; e2e (remote_write, header-gated prometheus import, config error path) ok; test bits removed, clean redeploy | (remote) | ok | ~15k |
+| 13:10 | compose switched to stock timescaledb/grafana images + bind mounts; own images renamed lojdr/metrics-{receiver,importer}; sync-compose.sh; local e2e ok | deploy/, docker/ | ok | ~30k |

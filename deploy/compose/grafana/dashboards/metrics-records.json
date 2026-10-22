@@ -1,0 +1,193 @@
+{
+  "uid": "metrics-records",
+  "title": "Metrics records (all sources)",
+  "description": "Raw rows from metrics_raw as tables, not graphs: every imported source side by side. Filter by source or metric at the top; the records table keeps the 100 newest rows per source, so a chatty source can never push the quiet ones out of view.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "type": "query",
+        "label": "Source",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "timescaledb"
+        },
+        "query": "SELECT DISTINCT labels->>'source' FROM metrics_raw ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "metric_name",
+        "type": "query",
+        "label": "Metric",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "timescaledb"
+        },
+        "query": "SELECT DISTINCT metric_name FROM metrics_raw ORDER BY 1",
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Sources overview",
+      "description": "One row per imported source: how many records it has in the selected time range, how many distinct metrics, and the time span they cover.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "timescaledb"
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Source",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [],
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "editorMode": "code",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "timescaledb"
+          },
+          "rawSql": "SELECT\n  labels->>'source'        AS \"Source\",\n  count(*)                 AS \"Records\",\n  count(DISTINCT metric_name) AS \"Metrics\",\n  min(time)                AS \"Oldest\",\n  max(time)                AS \"Newest\"\nFROM metrics_raw\nWHERE $__timeFilter(time)\nGROUP BY 1\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Records",
+      "description": "The raw metrics_raw rows themselves — time, source, metric, value and the full label set. Newest first, capped at the 100 newest rows per source so all sources stay visible even when one produces far more samples than the others.",
+      "gridPos": {
+        "h": 18,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "timescaledb"
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [],
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "editorMode": "code",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "timescaledb"
+          },
+          "rawSql": "WITH ranked AS (\n  SELECT\n    time                      AS t,\n    labels->>'source'         AS src,\n    metric_name               AS metric,\n    value                     AS val,\n    labels::text              AS lbls,\n    row_number() OVER (\n      PARTITION BY labels->>'source' ORDER BY time DESC\n    ) AS rn\n  FROM metrics_raw\n  WHERE $__timeFilter(time)\n    AND labels->>'source' IN (${source:sqlstring})\n    AND metric_name IN (${metric_name:sqlstring})\n)\nSELECT\n  t     AS \"Time\",\n  src   AS \"Source\",\n  metric AS \"Metric\",\n  val   AS \"Value\",\n  lbls  AS \"Labels\"\nFROM ranked\nWHERE rn <= 100\nORDER BY t DESC"
+        }
+      ]
+    }
+  ],
+  "tags": [
+    "metrics",
+    "records",
+    "importer"
+  ]
+}

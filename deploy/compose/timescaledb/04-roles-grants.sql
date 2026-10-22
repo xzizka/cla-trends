@@ -1,6 +1,6 @@
 -- docker compose counterpart of roles/timescaledb/templates/04-roles-grants.sql.j2.
 -- Passwords arrive as psql variables (-v receiver_password=...) instead of
--- being templated in, so this file can be baked into the image. :'var'
+-- being templated in, so this file can ship as-is in the compose bundle. :'var'
 -- quotes them as literals, so any character is safe in a password.
 --
 -- Not a DO $$ block like the Ansible template: psql does not substitute

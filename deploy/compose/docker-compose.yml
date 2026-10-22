@@ -4,14 +4,20 @@
 #   cp importer.env.example importer.env  # source credentials (may stay empty)
 #   docker compose up -d
 #
+# TimescaleDB and Grafana are the stock upstream images; this stack's schema
+# (./timescaledb) and Grafana provisioning (./grafana) are bind-mounted.
+# Only the receiver and the importer are images of their own.
+#
 # Source connections for the importer live in ./config/sources.yml and can be
 # edited after deployment — see README.md.
 
 name: cla-metrics
 
 services:
+  # NOT the -oss tag: continuous aggregates and retention/compression
+  # policies are Timescale-License features, absent from the Apache-only build.
   timescaledb:
-    image: ${REGISTRY_NS:-lojdr}/cla-timescaledb:${STACK_VERSION:-1.1.0}
+    image: docker.io/timescale/timescaledb:${TIMESCALEDB_TAG:-2.31.0-pg18}
     restart: unless-stopped
     environment:
       POSTGRES_DB: metrics
@@ -33,10 +39,13 @@ services:
 
   # One-shot: applies schema, continuous aggregates, policies and
   # roles/grants on every `up` (all idempotent), then exits 0.
+  # Same approach as the Ansible role, not docker-entrypoint-initdb.d.
   db-init:
-    image: ${REGISTRY_NS:-lojdr}/cla-timescaledb:${STACK_VERSION:-1.1.0}
+    image: docker.io/timescale/timescaledb:${TIMESCALEDB_TAG:-2.31.0-pg18}
     restart: "no"
-    entrypoint: ["cla-apply-schema"]
+    entrypoint: ["sh", "/opt/sql-init/apply-schema.sh"]
+    volumes:
+      - ./timescaledb:/opt/sql-init:ro
     environment:
       PGHOST: timescaledb
       PGUSER: postgres
@@ -50,7 +59,7 @@ services:
         condition: service_healthy
 
   grafana:
-    image: ${REGISTRY_NS:-lojdr}/cla-grafana:${STACK_VERSION:-1.1.0}
+    image: docker.io/grafana/grafana:${GRAFANA_TAG:-13.2.4}
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
@@ -61,6 +70,11 @@ services:
       GRAFANA_RO_DB_PASSWORD: ${GRAFANA_RO_DB_PASSWORD:?set GRAFANA_RO_DB_PASSWORD in .env}
     volumes:
       - grafana-data:/var/lib/grafana
+      # datasource password comes from the env below (${VAR} in the file)
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # not under /var/lib/grafana: that is the named volume above
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
     ports:
       - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
     healthcheck:
@@ -74,7 +88,7 @@ services:
 
   # Push: accepts Prometheus remote_write.
   receiver:
-    image: ${REGISTRY_NS:-lojdr}/cla-receiver:${STACK_VERSION:-1.1.0}
+    image: ${REGISTRY_NS:-lojdr}/metrics-receiver:${STACK_VERSION:-1.1.0}
     restart: unless-stopped
     environment:
       RECEIVER_PORT: "9201"
@@ -95,7 +109,7 @@ services:
 
   # Pull: polls the sources in ./config/sources.yml on their schedules.
   importer:
-    image: ${REGISTRY_NS:-lojdr}/cla-importer:${STACK_VERSION:-1.1.0}
+    image: ${REGISTRY_NS:-lojdr}/metrics-importer:${STACK_VERSION:-1.1.0}
     restart: unless-stopped
     # IMPORTER_CRED_* secrets referenced from sources.yml as ${...}
     env_file:

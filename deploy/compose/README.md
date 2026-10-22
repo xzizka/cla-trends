@@ -1,31 +1,41 @@
 # CLA metrics stack — nasazení přes docker compose
 
-Celý systém (TimescaleDB, Grafana, receiver, importer) z hotových image na
-Docker Hubu (`lojdr/cla-*`) — bez Ansiblu, bez buildu na cílovém stroji.
+Celý systém (TimescaleDB, Grafana, receiver, importer) z hotových image —
+bez Ansiblu, bez buildu na cílovém stroji. TimescaleDB a Grafana běží ze
+**standardních upstream image**; schéma databáze a provisioning Grafany jsou
+soubory v tomto adresáři, namountované do kontejnerů. Vlastní image mají jen
+receiver a importer (`lojdr/metrics-receiver`, `lojdr/metrics-importer`).
 
 | Služba | Image | Co dělá | Port |
 |---|---|---|---|
-| `timescaledb` | `lojdr/cla-timescaledb` | úložiště metrik (TimescaleDB 2.31.0, PostgreSQL 18) | `127.0.0.1:5432` |
-| `db-init` | `lojdr/cla-timescaledb` | jednorázově při každém `up`: schéma, agregace, retence, role a granty (idempotentní), pak skončí | – |
-| `grafana` | `lojdr/cla-grafana` | Grafana 13.2.4 s předkonfigurovaným datasourcem a dashboardy | `0.0.0.0:3000` |
-| `receiver` | `lojdr/cla-receiver` | **push** — přijímá Prometheus `remote_write` | `0.0.0.0:9201` |
-| `importer` | `lojdr/cla-importer` | **pull** — stahuje data ze zdrojů podle `config/sources.yml` | `127.0.0.1:9202` |
+| `timescaledb` | `timescale/timescaledb:2.31.0-pg18` | úložiště metrik (PostgreSQL 18) | `127.0.0.1:5432` |
+| `db-init` | `timescale/timescaledb:2.31.0-pg18` | jednorázově při každém `up` spustí `timescaledb/apply-schema.sh`: schéma, agregace, retence, role a granty (idempotentní), pak skončí | – |
+| `grafana` | `grafana/grafana:13.2.4` | vizualizace; datasource a dashboardy z `grafana/` | `0.0.0.0:3000` |
+| `receiver` | `lojdr/metrics-receiver:1.1.0` | **push** — přijímá Prometheus `remote_write` | `0.0.0.0:9201` |
+| `importer` | `lojdr/metrics-importer:1.1.0` | **pull** — stahuje data ze zdrojů podle `config/sources.yml` | `127.0.0.1:9202` |
 
-Všechny čtyři image mají společnou verzi (`STACK_VERSION`, teď `1.1.0`).
+Verze jsou v `.env`: `TIMESCALEDB_TAG`, `GRAFANA_TAG` a `STACK_VERSION`
+(receiver + importer).
 
 ## 1. Instalace
 
 Potřeba: Docker Engine s pluginem `docker compose` (v2.24+, kvůli
 `env_file: required: false`).
 
-Zkopíruj na server celý adresář `deploy/compose/` (stačí tyto soubory):
+Zkopíruj na server **celý** adresář `deploy/compose/`:
 
 ```
 docker-compose.yml
 .env.example
 importer.env.example
-config/sources.yml
+config/sources.yml                     # zdroje importeru
+timescaledb/*.sql, apply-schema.sh     # schéma DB (pro db-init)
+grafana/provisioning/…, grafana/dashboards/*.json
 ```
+
+Soubory musí zůstat čitelné pro všechny (0644, adresáře 0755) — procesy
+v kontejnerech běží pod vlastním uid (Grafana 472, postgres), ne pod tvým.
+Běžné `cp`/`tar`/`scp` práva zachovají.
 
 ```bash
 cd deploy/compose            # nebo kamkoli jsi ho zkopíroval
@@ -215,8 +225,12 @@ Pravidla:
 ## 4. Provoz
 
 ```bash
-# upgrade na novou verzi image: změň STACK_VERSION v .env, pak
+# upgrade: změň TIMESCALEDB_TAG / GRAFANA_TAG / STACK_VERSION v .env, pak
 docker compose pull && docker compose up -d
+# TimescaleDB: příponu -pg18 neměň (jiná major verze PostgreSQL = pg_upgrade).
+# Po změně verze TimescaleDB aktualizuj extension v existující databázi:
+docker compose exec timescaledb psql -U postgres -d metrics -X \
+  -c "ALTER EXTENSION timescaledb UPDATE"
 
 # zastavení (data zůstávají ve volumes)
 docker compose down
@@ -236,20 +250,29 @@ docker compose exec timescaledb psql -U postgres -d metrics -c \
 ```
 
 Volumes: `cla-metrics_timescaledb-data` (metriky) a `cla-metrics_grafana-data`
-(uživatelé, ručně vytvořené dashboardy). Provisionované dashboardy jsou součástí
-image a aktualizují se s ním.
+(uživatelé, ručně vytvořené dashboardy). Provisionované dashboardy jsou soubory
+v `grafana/dashboards/` — Grafana je načítá znovu každých 30 s, změna se
+projeví bez restartu.
 
-## 5. Build a publikace image (pro vývojáře)
+## 5. Pro vývojáře: build image a synchronizace s Ansible rolemi
 
 Z kořene repa:
 
 ```bash
 docker login                       # účet s právem pushovat do lojdr/
-docker/build-and-push.sh           # build + push :1.1.0 a :latest
+docker/build-and-push.sh           # build + push metrics-receiver/-importer :1.1.0 a :latest
 PUSH=0 docker/build-and-push.sh    # jen build
 STACK_VERSION=1.2.0 docker/build-and-push.sh
 ```
 
-Verze upstream komponent jsou v `docker/build-and-push.sh`
-(`TIMESCALEDB_TAG`, `GRAFANA_TAG`) a v `roles/*/files/app/Containerfile` +
-`requirements.txt`.
+SQL (`timescaledb/01–03`) a dashboardy (`grafana/dashboards/`) jsou kopie
+z `roles/` — tam je jediný zdroj pravdy. Po jejich změně:
+
+```bash
+deploy/sync-compose.sh             # zkopíruje do deploy/compose/
+deploy/sync-compose.sh --check     # exit 1, pokud jsou kopie zastaralé
+```
+
+`timescaledb/04-roles-grants.sql` a `grafana/provisioning/` jsou compose
+varianty Ansible šablon (hesla přes proměnné místo Jinja) — při změně grantů
+nebo datasourcu je potřeba upravit obojí ručně.

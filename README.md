@@ -21,11 +21,12 @@ plyne (viz níže). Návrh agregace/retenčních vrstev:
 
 ## Alternativa: docker compose z hotových image
 
-Bez Ansiblu: image `lojdr/cla-timescaledb`, `lojdr/cla-grafana`,
-`lojdr/cla-receiver` a `lojdr/cla-importer` na Docker Hubu + compose soubor
-v [`deploy/compose/`](deploy/compose/README.md). Tamní README popisuje
-instalaci i úpravu připojení ke zdrojům (`config/sources.yml`) po nasazení.
-Image se staví a publikují skriptem `docker/build-and-push.sh`.
+Bez Ansiblu: standardní image `timescale/timescaledb` a `grafana/grafana` +
+vlastní `lojdr/metrics-receiver` a `lojdr/metrics-importer` z Docker Hubu,
+compose soubor v [`deploy/compose/`](deploy/compose/README.md). Tamní README
+popisuje instalaci i úpravu připojení ke zdrojům (`config/sources.yml`) po
+nasazení. Image se staví a publikují skriptem `docker/build-and-push.sh`,
+sdílené SQL/dashboardy se do compose balíku kopírují `deploy/sync-compose.sh`.
 
 ## Rozdíly oproti `master` (proč tahle branch existuje)
 
