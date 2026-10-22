@@ -855,6 +855,70 @@ class TestConfig(unittest.TestCase):
         import config
         self.assertEqual(config.load(self.write("sources: []\n")), [])
 
+    def test_yaml_syntax_error_is_a_config_error(self):
+        import config
+        path = self.write("sources:\n  - name: a\n   type: prometheus\n")
+        with self.assertRaises(ValueError) as ctx:
+            config.load(path)
+        self.assertIn("not valid YAML", str(ctx.exception))
+        self.assertIn("line", str(ctx.exception))
+
+    def test_prometheus_headers_alongside_auth(self):
+        # Multi-tenant Mimir: X-Scope-OrgID *and* Authorization at once, the
+        # combination a single `auth` block cannot express.
+        import config
+        os.environ["UT_PROM_TOKEN"] = "s3cr3t"
+        self.addCleanup(os.environ.pop, "UT_PROM_TOKEN")
+        path = self.write(
+            "sources:\n"
+            "  - name: mimir\n    type: prometheus\n    url: http://m/prometheus\n"
+            "    schedule: {every: 1h}\n"
+            "    auth: {type: bearer, token: '${UT_PROM_TOKEN}'}\n"
+            "    headers: {X-Scope-OrgID: tenant-1, X-Api-Key: '${UT_PROM_TOKEN}'}\n"
+            "    queries: [{name: up, query: up}]\n"
+        )
+        h = config.load(path)[0].source.http.session.headers
+        self.assertEqual(h["X-Scope-OrgID"], "tenant-1")
+        self.assertEqual(h["X-Api-Key"], "s3cr3t")
+        self.assertEqual(h["Authorization"], "Bearer s3cr3t")
+
+    def test_header_clashing_with_auth_rejected(self):
+        import config
+        for auth in ("{type: bearer, token: t}", "{type: basic, username: u, password: p}"):
+            path = self.write(
+                "sources:\n  - name: p\n    type: prometheus\n    url: http://p\n"
+                "    schedule: {every: 1h}\n    auth: %s\n"
+                "    headers: {authorization: x}\n"
+                "    queries: [{name: up, query: up}]\n" % auth
+            )
+            with self.assertRaises(ValueError) as ctx:
+                config.load(path)
+            self.assertIn("source 'p'", str(ctx.exception))
+            self.assertIn("auth", str(ctx.exception))
+
+    def test_invalid_headers_rejected(self):
+        import config
+        for headers in ("[a, b]", "{'bad name': x}", "{X-A: {nested: 1}}", "{X-A: null}"):
+            path = self.write(
+                "sources:\n  - name: p\n    type: prometheus\n    url: http://p\n"
+                "    schedule: {every: 1h}\n    headers: %s\n"
+                "    queries: [{name: up, query: up}]\n" % headers
+            )
+            with self.assertRaises(ValueError, msg=headers):
+                config.load(path)
+
+    def test_headers_on_postgres_rejected(self):
+        import config
+        path = self.write(
+            "sources:\n  - name: pg\n    type: postgres\n    host: h\n"
+            "    database: d\n    schedule: {every: 1h}\n    headers: {X-A: b}\n"
+            "    queries:\n      - name: q\n"
+            "        query: 'SELECT ts, value FROM t WHERE ts >= $__start AND ts < $__stop'\n"
+        )
+        with self.assertRaises(ValueError) as ctx:
+            config.load(path)
+        self.assertIn("HTTP", str(ctx.exception))
+
 
 # ---------------------------------------------------------------------------
 # runner: the window filter and provenance labels

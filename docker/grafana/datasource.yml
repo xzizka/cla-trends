@@ -1,0 +1,21 @@
+# docker compose counterpart of roles/grafana/templates/timescaledb.yml.j2.
+# uid must stay `timescaledb`: the provisioned dashboards reference it.
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    uid: timescaledb
+    type: postgres
+    access: proxy
+    url: ${TIMESCALEDB_HOST}:5432
+    database: ${TIMESCALEDB_DB}
+    user: grafana_ro
+    isDefault: true
+    editable: false
+    jsonData:
+      database: ${TIMESCALEDB_DB}
+      sslmode: disable
+      postgresVersion: 1800
+      timescaledb: true
+    secureJsonData:
+      password: ${GRAFANA_RO_DB_PASSWORD}

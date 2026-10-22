@@ -19,6 +19,14 @@ plyne (viz níže). Návrh agregace/retenčních vrstev:
 [`docs/AGGREGATION-DESIGN.md`](docs/AGGREGATION-DESIGN.md), návrh importeru:
 [`docs/IMPORTER-DESIGN.md`](docs/IMPORTER-DESIGN.md).
 
+## Alternativa: docker compose z hotových image
+
+Bez Ansiblu: image `lojdr/cla-timescaledb`, `lojdr/cla-grafana`,
+`lojdr/cla-receiver` a `lojdr/cla-importer` na Docker Hubu + compose soubor
+v [`deploy/compose/`](deploy/compose/README.md). Tamní README popisuje
+instalaci i úpravu připojení ke zdrojům (`config/sources.yml`) po nasazení.
+Image se staví a publikují skriptem `docker/build-and-push.sh`.
+
 ## Rozdíly oproti `master` (proč tahle branch existuje)
 
 - **Container engine**: Docker místo rootless Podman. Kontejnery se spravují
@@ -165,6 +173,21 @@ bind-mountnutý a proces v kontejneru běží pod vlastním uid.)
 Zdroj s `credentials_id`, ke kterému ve vaultu nic není, playbook odmítne
 hned na začátku role a řekne které to je — ne až za hodinu jako 401 od
 endpointu.
+
+**Vlastní HTTP hlavičky** (`prometheus`, `influxdb1`, `influxdb2`): mapa
+`headers:` se posílá s každým požadavkem a jde kombinovat s `auth` — např.
+multi-tenant Mimir potřebuje `X-Scope-OrgID` *a* `Authorization` zároveň.
+Tajnou hodnotu dej do `vault_importer_env` a v `headers` na ni odkaž jako
+`"${IMPORTER_CRED_...}"`. Hlavičku, kterou už nastavuje `auth`, importer
+odmítne jako konflikt.
+
+```yaml
+    auth: {type: bearer}
+    credentials_id: mimir              # -> IMPORTER_CRED_MIMIR_TOKEN
+    headers:
+      X-Scope-OrgID: tenant-1
+      X-Api-Key: "${IMPORTER_CRED_MIMIR_API_KEY}"
+```
 
 **2. Rozvrh** se nastavuje u každého zdroje zvlášť, jednou z dvou variant:
 

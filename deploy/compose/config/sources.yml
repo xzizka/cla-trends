@@ -1,0 +1,114 @@
+# Importer sources — the pull side of the stack. Edit, then apply with:
+#
+#   docker compose restart importer
+#
+# The file is read once at startup and validated strictly; a mistake makes
+# the importer refuse to start with a message naming the source and key
+# (`docker compose logs importer`). Full guide: README.md.
+#
+# Secrets do NOT belong here: write ${NAME} and put NAME=value in
+# importer.env (then `docker compose up -d importer`, see README.md).
+
+# Applied to every source; any key can be overridden per source.
+defaults:
+  timeout_seconds: 60
+  max_lookback: 7d        # first-run window and max outage backfill (= raw retention)
+  end_lag: 0s             # do not import the newest N seconds
+  tls_verify: true
+  retries: 3
+  run_on_start: true      # import once right after start, not only on schedule
+
+# Empty list is valid: the importer idles and logs a warning.
+sources: []
+
+# --------------------------------------------------------------------------
+# Examples — copy under `sources:` (and remove the `[]`).
+# `queries[].name` is the watermark key: renaming it re-imports that stream
+# from max_lookback. Treat it as a stable id.
+# --------------------------------------------------------------------------
+#
+# sources:
+#   # Prometheus with bearer auth
+#   - name: prom-main
+#     type: prometheus
+#     url: http://prometheus.example:9090
+#     schedule: {every: 1h}
+#     auth: {type: bearer, token: "${IMPORTER_CRED_PROM_MAIN_TOKEN}"}
+#     step: 60s
+#     extra_labels: {env: prod}
+#     queries:
+#       - name: up
+#         query: up
+#       - name: cpu_rate
+#         query: rate(node_cpu_seconds_total[5m])
+#         metric_name: node_cpu_seconds_rate   # rate()/sum() drop __name__
+#
+#   # Prometheus-compatible API with custom headers (multi-tenant Mimir,
+#   # Cortex, Thanos, an API gateway...). `headers` is sent with every
+#   # request and can be combined with `auth`; a header `auth` already sets
+#   # (Authorization) is rejected as a conflict.
+#   - name: mimir
+#     type: prometheus
+#     url: http://mimir.example:8080/prometheus
+#     schedule: {every: 15m}
+#     auth: {type: bearer, token: "${IMPORTER_CRED_MIMIR_TOKEN}"}
+#     headers:
+#       X-Scope-OrgID: tenant-1
+#       X-Api-Key: "${IMPORTER_CRED_MIMIR_API_KEY}"
+#     queries:
+#       - name: up
+#         query: up
+#
+#   # InfluxDB 1.x (InfluxQL)
+#   - name: influx-legacy
+#     type: influxdb1
+#     url: http://influx1.example:8086
+#     database: telegraf
+#     schedule: {cron: "17 3 * * *", timezone: Europe/Prague}
+#     auth: {type: basic, username: reader, password: "${IMPORTER_CRED_INFLUX_LEGACY_PASSWORD}"}
+#     queries:
+#       - name: cpu_idle
+#         query: >-
+#           SELECT mean("usage_idle") FROM "cpu"
+#           WHERE $timeFilter GROUP BY time(1m), "host" fill(none)
+#         align: 1m                 # must match GROUP BY time(1m)
+#
+#   # InfluxDB 2.x (Flux)
+#   - name: influx-v2
+#     type: influxdb2
+#     url: http://influx2.example:8086
+#     org: my-org
+#     schedule: {every: 24h}
+#     auth: {type: token, token: "${IMPORTER_CRED_INFLUX_V2_TOKEN}"}
+#     queries:
+#       - name: mem_used
+#         align: 1m                 # must match aggregateWindow(every: 1m)
+#         query: |
+#           from(bucket: "metrics")
+#             |> range(start: $__start, stop: $__stop)
+#             |> filter(fn: (r) => r._measurement == "mem")
+#             |> aggregateWindow(every: 1m, fn: mean, createEmpty: false,
+#                                timeSrc: "_start")
+#
+#   # PostgreSQL (SQL)
+#   - name: pg-app
+#     type: postgres
+#     host: pg.example
+#     port: 5432
+#     database: appdb
+#     sslmode: require
+#     schedule: {every: 1h}
+#     auth: {type: basic, username: app_reader, password: "${IMPORTER_CRED_PG_APP_PASSWORD}"}
+#     queries:
+#       - name: queue_depth
+#         query: |
+#           SELECT time_bucket('1 minute', created_at) AS ts,
+#                  queue, host, avg(depth) AS depth
+#             FROM queue_stats
+#            WHERE created_at >= $__start AND created_at < $__stop
+#            GROUP BY 1, 2, 3
+#         time_column: ts
+#         value_column: depth
+#         label_columns: [queue, host]
+#         align: 1m
+#         metric_name: app_queue_depth

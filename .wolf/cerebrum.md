@@ -289,6 +289,22 @@
   keeps growing by one tick each cycle. Any check on the watermark must assert
   `watermark > newest row`, never equality.
 
+- Importer sources now accept `headers:` (map, every HTTP source type), applied
+  after `auth` in HttpClient; a header that `auth` already set (incl.
+  Authorization from basic) is a startup error, not a silent override. This
+  resolves the "X-Scope-OrgID + Authorization not expressible" limitation
+  noted above. Values may use `${ENV}` refs like any other config value.
+- The workstation's docker is a **snap**: it cannot see `/tmp` (compose
+  reports `/var/lib/snapd/void/...`). Bind mounts / compose projects for
+  local tests must live under `$HOME`.
+- Docker Hub account `lojdr` is logged in on the workstation; images are
+  published as `lojdr/cla-*` with one shared stack version tag + `latest`.
+- In a compose deployment, Grafana dashboards must NOT be baked under
+  `/var/lib/grafana` (a named volume keeps the first image's copy forever);
+  they live in `/etc/grafana/dashboards` in the cla-grafana image.
+- psql does not substitute `:'var'` inside `DO $$ ... $$`; use
+  `SELECT format(...) \gexec` for parameterised CREATE/ALTER ROLE.
+
 ## Do-Not-Repeat
 - 2026-09-01: Don't leave `[privilege_escalation] become = True` as a global
   ansible.cfg default in a mixed root/rootless-user playbook — scope `become:
@@ -310,7 +326,18 @@
   `chown -R` the affected paths back to the target user or the next run fails
   with "not writable".
 
+- 2026-10-22: Don't trust an old default compose/env file to keep working on
+  `restart` after editing an env_file — `docker compose restart` keeps the old
+  env; `up -d <svc>` is what recreates the container with new env.
+
 ## Decision Log
+- 2026-10-22: Compose deployment uses 4 custom images incl. TimescaleDB and
+  Grafana (schema + provisioning baked in) rather than stock images + host
+  bind mounts, so the server needs only the compose dir. Schema applied by a
+  one-shot `db-init` service on every `up` (same idempotent approach as the
+  Ansible role), not docker-entrypoint-initdb.d (bug-014). Passwords via
+  PGPASSWORD, never inside DSN URLs. Ansible path kept working and unchanged
+  apart from version bumps.
 - 2026-09-01: `docker-entrypoint-initdb.d` proved too fragile to rely on as
   the *only* mechanism for TimescaleDB schema setup (hit 4 separate failure
   modes across bug-003/007/009/013 — permissions, extension ordering, a

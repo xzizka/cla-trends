@@ -52,8 +52,10 @@ def expand_env(value, where="config", env=None):
             if name not in env:
                 raise ValueError(
                     "%s: references ${%s} but that environment variable is "
-                    "not set on the container — add it to vault_importer_env "
-                    "in group_vars/all/vault.yml and re-run the playbook"
+                    "not set on the container — add it to importer.env and "
+                    "`docker compose up -d importer` (docker compose), or to "
+                    "vault_importer_env in group_vars/all/vault.yml and re-run "
+                    "the playbook (Ansible)"
                     % (where, name)
                 )
             return env[name]
@@ -110,7 +112,13 @@ def load(path):
             "templates/sources.yml.j2, check the bind mount" % path
         )
     with open(path, "r") as fh:
-        doc = yaml.safe_load(fh) or {}
+        try:
+            doc = yaml.safe_load(fh) or {}
+        except yaml.YAMLError as exc:
+            # The file is hand-edited on the host (docker compose deployment),
+            # so a syntax slip is the likeliest mistake of all — report it as
+            # a config error with its line number, not as a traceback.
+            raise ValueError("%s is not valid YAML: %s" % (path, exc))
     if not isinstance(doc, dict):
         raise ValueError("%s: top level must be a mapping" % path)
     doc = expand_env(doc, os.path.basename(path))
@@ -175,16 +183,24 @@ def _build_job(cfg, defaults, where):
     # HttpClient would misread (and reject, e.g. basic without a password).
     # So the client is only built for plugins that speak HTTP.
     cls = source_plugins.get(cfg.get("type"), where)
+    if cfg.get("headers") and not getattr(cls, "uses_http", True):
+        raise ValueError("%s: `headers` only applies to HTTP sources, not %r"
+                         % (where, cfg.get("type")))
     http = None
     if getattr(cls, "uses_http", True):
-        http = HttpClient(
-            auth=cfg.get("auth"),
-            timeout=pick("timeout_seconds"),
-            tls_verify=pick("tls_verify"),
-            retries=pick("retries"),
-            backoff=pick("backoff"),
-            source_name=cfg["name"],
-        )
+        try:
+            http = HttpClient(
+                auth=cfg.get("auth"),
+                timeout=pick("timeout_seconds"),
+                tls_verify=pick("tls_verify"),
+                retries=pick("retries"),
+                backoff=pick("backoff"),
+                source_name=cfg["name"],
+                headers=cfg.get("headers"),
+            )
+        except ValueError as exc:
+            # HttpClient does not know which source it belongs to; name it.
+            raise ValueError("%s: %s" % (where, exc))
 
     source = source_plugins.build(cfg, http)
     # Resolved default, not the raw cfg lookup: for HTTP sources this value

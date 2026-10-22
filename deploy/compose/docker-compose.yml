@@ -1,0 +1,127 @@
+# Grafana + TimescaleDB metrics stack — docker compose deployment.
+#
+#   cp .env.example .env                  # fill in passwords
+#   cp importer.env.example importer.env  # source credentials (may stay empty)
+#   docker compose up -d
+#
+# Source connections for the importer live in ./config/sources.yml and can be
+# edited after deployment — see README.md.
+
+name: cla-metrics
+
+services:
+  timescaledb:
+    image: ${REGISTRY_NS:-lojdr}/cla-timescaledb:${STACK_VERSION:-1.1.0}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metrics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      # PG18+ images want the mount at /var/lib/postgresql, not .../data
+      - timescaledb-data:/var/lib/postgresql
+    ports:
+      # loopback only: for psql from the host; the other services use the
+      # internal network
+      - "127.0.0.1:${TIMESCALEDB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "metrics"]
+      interval: 15s
+      retries: 5
+      start_period: 30s
+
+  # One-shot: applies schema, continuous aggregates, policies and
+  # roles/grants on every `up` (all idempotent), then exits 0.
+  db-init:
+    image: ${REGISTRY_NS:-lojdr}/cla-timescaledb:${STACK_VERSION:-1.1.0}
+    restart: "no"
+    entrypoint: ["cla-apply-schema"]
+    environment:
+      PGHOST: timescaledb
+      PGUSER: postgres
+      PGDATABASE: metrics
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      RECEIVER_DB_PASSWORD: ${RECEIVER_DB_PASSWORD:?set RECEIVER_DB_PASSWORD in .env}
+      IMPORTER_DB_PASSWORD: ${IMPORTER_DB_PASSWORD:?set IMPORTER_DB_PASSWORD in .env}
+      GRAFANA_RO_DB_PASSWORD: ${GRAFANA_RO_DB_PASSWORD:?set GRAFANA_RO_DB_PASSWORD in .env}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  grafana:
+    image: ${REGISTRY_NS:-lojdr}/cla-grafana:${STACK_VERSION:-1.1.0}
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      TIMESCALEDB_HOST: timescaledb
+      TIMESCALEDB_DB: metrics
+      GRAFANA_RO_DB_PASSWORD: ${GRAFANA_RO_DB_PASSWORD:?set GRAFANA_RO_DB_PASSWORD in .env}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  # Push: accepts Prometheus remote_write.
+  receiver:
+    image: ${REGISTRY_NS:-lojdr}/cla-receiver:${STACK_VERSION:-1.1.0}
+    restart: unless-stopped
+    environment:
+      RECEIVER_PORT: "9201"
+      RECEIVER_BEARER_TOKEN: ${RECEIVER_BEARER_TOKEN:?set RECEIVER_BEARER_TOKEN in .env}
+      # password via PGPASSWORD, not in the URL: no URL-encoding pitfalls
+      RECEIVER_PG_DSN: postgresql://receiver@timescaledb:5432/metrics
+      PGPASSWORD: ${RECEIVER_DB_PASSWORD:?set RECEIVER_DB_PASSWORD in .env}
+    ports:
+      - "${RECEIVER_BIND:-0.0.0.0}:${RECEIVER_PORT:-9201}:9201"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9201/healthz', timeout=3)"]
+      interval: 15s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+  # Pull: polls the sources in ./config/sources.yml on their schedules.
+  importer:
+    image: ${REGISTRY_NS:-lojdr}/cla-importer:${STACK_VERSION:-1.1.0}
+    restart: unless-stopped
+    # IMPORTER_CRED_* secrets referenced from sources.yml as ${...}
+    env_file:
+      - path: importer.env
+        required: false
+    environment:
+      IMPORTER_CONFIG: /etc/importer/sources.yml
+      IMPORTER_STATUS_PORT: "9202"
+      IMPORTER_PG_DSN: postgresql://importer@timescaledb:5432/metrics
+      PGPASSWORD: ${IMPORTER_DB_PASSWORD:?set IMPORTER_DB_PASSWORD in .env}
+      LOG_LEVEL: ${IMPORTER_LOG_LEVEL:-INFO}
+    volumes:
+      # the directory, not the file: editors save by replacing the file, and a
+      # single-file bind mount would keep showing the old one
+      - ./config:/etc/importer:ro
+    ports:
+      - "127.0.0.1:${IMPORTER_STATUS_PORT:-9202}:9202"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9202/healthz', timeout=3)"]
+      interval: 15s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+volumes:
+  timescaledb-data:
+  grafana-data:

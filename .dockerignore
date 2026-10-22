@@ -1,0 +1,7 @@
+# Build context for docker/*/Dockerfile is the repo root (so the images reuse
+# the SQL and Grafana provisioning under roles/ instead of copies). Keep the
+# context to what those Dockerfiles COPY — and never the vault password.
+*
+!docker/
+!roles/timescaledb/files/init/
+!roles/grafana/files/provisioning/

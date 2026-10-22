@@ -26,7 +26,7 @@ _RETRY_STATUS = (429, 500, 502, 503, 504)
 
 class HttpClient(object):
     def __init__(self, auth=None, timeout=60.0, tls_verify=True, retries=3,
-                 backoff=2.0, source_name="?"):
+                 backoff=2.0, source_name="?", headers=None):
         self.timeout = float(timeout)
         self.retries = int(retries)
         self.backoff = float(backoff)
@@ -34,6 +34,7 @@ class HttpClient(object):
         self.session = requests.Session()
         self.session.verify = bool(tls_verify)
         self._apply_auth(auth or {})
+        self._apply_headers(headers or {})
 
     def _apply_auth(self, auth):
         kind = (auth.get("type") or "none").lower()
@@ -54,6 +55,41 @@ class HttpClient(object):
                 "auth.type %r not supported — use one of: none, bearer, token, "
                 "basic, header" % kind
             )
+
+    def _apply_headers(self, headers):
+        """Extra static headers sent with every request of this source.
+
+        Independent of `auth`, because some endpoints need more than one: a
+        multi-tenant Mimir/Cortex/Thanos wants `X-Scope-OrgID` *and* an
+        `Authorization` header, which a single `auth` block cannot express.
+        Secret values belong in `${ENV}` references like any other secret.
+
+        A header that `auth` already sets is refused rather than silently
+        overwritten — which of the two "wins" is exactly the kind of thing
+        that turns into an unexplained 401.
+        """
+        if not isinstance(headers, dict):
+            raise ValueError("headers must be a mapping of name: value, got %r"
+                             % type(headers).__name__)
+        taken = {k.lower() for k in self.session.headers
+                 if k not in _DEFAULT_HEADERS}
+        if self.session.auth is not None:
+            taken.add("authorization")
+        for name, value in headers.items():
+            name = str(name).strip()
+            if not name or not _HEADER_NAME_RE.match(name):
+                raise ValueError("headers: %r is not a valid HTTP header name" % name)
+            if value is None or isinstance(value, (dict, list)):
+                raise ValueError("headers.%s: value must be a string" % name)
+            if name.lower() in taken:
+                raise ValueError(
+                    "headers.%s: already set by `auth` — use one or the other"
+                    % name)
+            value = str(value)
+            if "\r" in value or "\n" in value:
+                raise ValueError("headers.%s: value must be a single line" % name)
+            self.session.headers[name] = value
+            taken.add(name.lower())
 
     def get(self, url, params=None):
         return self._request("GET", url, params=params)
@@ -104,6 +140,14 @@ class HttpClient(object):
             self.session.close()
         except Exception:  # pragma: no cover
             pass
+
+
+#: Headers requests.Session sets on its own; anything else in the session
+#: headers at _apply_headers() time was put there by `auth`.
+_DEFAULT_HEADERS = frozenset(requests.utils.default_headers())
+
+#: RFC 9110 token characters.
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 def _need(auth, key):

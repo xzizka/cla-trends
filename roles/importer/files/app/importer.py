@@ -297,8 +297,10 @@ def main():
         # fresh deploy. Stay up and healthy so the container is not in a
         # restart loop while someone configures the first source.
         log.warning("no enabled sources configured in %s — idling. Add entries "
-                    "to importer_sources in group_vars/all/vars.yml and "
-                    "re-run the playbook.", CONFIG_PATH)
+                    "to config/sources.yml and `docker compose restart "
+                    "importer` (docker compose), or to importer_sources in "
+                    "group_vars/all/vars.yml and re-run the playbook "
+                    "(Ansible).", CONFIG_PATH)
         _shutdown.wait()
         return 0
 

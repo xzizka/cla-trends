@@ -15,6 +15,8 @@ Config (one entry of `sources:` in sources.yml):
       url: http://prometheus.example:9090
       schedule: {every: 1h}
       auth: {type: bearer, token: "..."}
+      headers:                      # optional, sent with every request
+        X-Scope-OrgID: tenant-1     # e.g. multi-tenant Mimir/Cortex/Thanos
       step: 60s                     # default for every query below
       queries:
         - name: cpu_rate            # watermark key — keep it stable

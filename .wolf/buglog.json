@@ -535,5 +535,41 @@
     "related_bugs": [],
     "occurrences": 1,
     "last_seen": "2026-10-19T15:22:00Z"
+  },
+  {
+    "id": "bug-030",
+    "timestamp": "2026-10-22T10:15:00",
+    "error_message": "importer crash-loops with a yaml.parser.ParserError traceback when sources.yml has a YAML syntax error",
+    "file": "roles/importer/files/app/config.py",
+    "root_cause": "config.load() only converted ValueError into the clean 'invalid configuration' log line; yaml.YAMLError escaped as an unhandled exception. Became relevant once sources.yml is hand-edited on the host (docker compose deployment).",
+    "fix": "catch yaml.YAMLError in config.load and re-raise as ValueError('<path> is not valid YAML: ...') incl. line/column; unit test added",
+    "tags": [
+      "importer",
+      "yaml",
+      "config",
+      "compose",
+      "error-handling"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-10-22T10:15:00"
+  },
+  {
+    "id": "bug-031",
+    "timestamp": "2026-10-22T10:15:00",
+    "error_message": "compose file \"/var/lib/snapd/void/docker-compose.yml\" is invalid: no such file or directory",
+    "file": "(test harness)",
+    "root_cause": "local docker/compose is a snap and cannot see /tmp (snap confinement), so a compose project in the session scratchpad under /tmp is invisible to it",
+    "fix": "run docker compose projects / bind mounts from a directory under $HOME, not /tmp",
+    "tags": [
+      "docker",
+      "snap",
+      "compose",
+      "tmp",
+      "workstation"
+    ],
+    "related_bugs": [],
+    "occurrences": 1,
+    "last_seen": "2026-10-22T10:15:00"
   }
 ]
